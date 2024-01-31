@@ -1,0 +1,4 @@
+__pycache__
+.venv
+.vscode
+transfer_serial_old.py
