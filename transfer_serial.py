@@ -1,51 +1,26 @@
+import asyncio
 import configparser
-import datetime
 import os
-import re
-import struct
-import subprocess
-import threading
-import time
 import tkinter as tk
-import tkinter.filedialog
-from tkinter import ttk
-from tkinter.scrolledtext import ScrolledText
 
 import numpy as np
-import serial
-from matplotlib import pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-
-config = configparser.ConfigParser()
-config["serial_set"] = {  # type: ignore
-    "portname": "COM3",
-    "baudrate": 9600,
-    "timeout": 3,
-    "stopbits": 1,
-    "bytesize": 8,
-    "parity": "N",
-    "xonxoff": "True",
-}
-config.read("config.ini")
-read_base = config["serial_set"]
-if not os.path.exists("config.ini"):
-    with open("config.ini", "w+") as file:
-        config.write(file)
+import serial_asyncio
 
 
-#
-class Ser(serial.Serial):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.port = read_base.get("portname")
-        self.baudrate = read_base.getint("baudrate")
-        self.timeout = read_base.getfloat("timeout")
-        self.stopbits = read_base.getint("stopbits")
-        self.bytesize = read_base.getint("bytesize")
-        self.parity = read_base.get("parity")
-        self.xonxoff = False
-        self.rtscts = False
-        self.dsrdtr = False
+# Ser class modify
+class Transfer_serial_async(asyncio.Protocol):
+    def connection_made(self, transport):
+        self.transport = transport
+        print("Port Opened", transport)
+        transport.serial.rts = False
+        transport.write(b"Hellow, World!\n")
+
+    def data_received(self, data):
+        print("Data Received", repr(data))
+
+    def connection_lost(self, exc):
+        print("Port Closed")
+        asyncio.get_event_loop().stop()
 
     def portopen(self):
         try:
@@ -141,14 +116,14 @@ class Tk_Button(tk.Button):
         self.configure(**kw)
 
 
-class App(tk.Frame, Ser):
+class App(tk.Frame, Transfer_serial_async):
     def __init__(self, root) -> None:
         super().__init__(root, width=380, height=180, borderwidth=3, relief="groove")
         self.root = root
         self.pack()
         self.pack_propagate(True)
         self.create_widgets()
-        self.seri = Ser()
+        self.seri = Transfer_serial_async()
 
     def text_box(self):
         pass
@@ -211,6 +186,22 @@ class App(tk.Frame, Ser):
         if self.read_btn["state"] == tk.DISABLED:
             self.after_id = self.after(150, lambda: self.serial_read())
 
+
+config = configparser.ConfigParser()
+config["serial_set"] = {  # type: ignore
+    "portname": "COM3",
+    "baudrate": 9600,
+    "timeout": 3,
+    "stopbits": 1,
+    "bytesize": 8,
+    "parity": "N",
+    "xonxoff": "True",
+}
+config.read("config.ini")
+read_base = config["serial_set"]
+if not os.path.exists("config.ini"):
+    with open("config.ini", "w+") as file:
+        config.write(file)
 
 root = tk.Tk()
 root.geometry("640x480")
