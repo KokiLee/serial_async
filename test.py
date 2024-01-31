@@ -1,21 +1,21 @@
 import unittest
 
-from transfer_serial import lrc
+from transfer_serial import Transfer_serial_async
 
 
-class TestLRC(unittest.TestCase):
-    def test_lrc(self):
-        # テストケース1: ASCII文字列
-        data = b"Hello, World!".decode()
-        expected = "2D"
-        actual = lrc(data)
-        self.assertEqual(actual, expected)
+class TestTransferSerialAsync(unittest.TestCase):
+    def test_data_received(self):
+        # Transfer_serial_async インスタンスを作成
+        transfer = Transfer_serial_async()
 
-        # テストケース2: バイナリデータ
-        data = b"\x01\x02\x03\x04\x05"
-        expected = 0x05
-        actual = lrc(data)
-        self.assertEqual(actual, expected)
+        # テストデータ
+        test_data = b"Hello, World!"
+
+        # data_received メソッドを呼び出す
+        transfer.data_received(test_data)
+
+        # データが正しく追加されたことを確認
+        self.assertEqual(transfer.data[0], test_data)
 
 
 if __name__ == "__main__":

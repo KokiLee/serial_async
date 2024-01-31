@@ -1,5 +1,6 @@
 import asyncio
 import configparser
+import logging
 import os
 import tkinter as tk
 
@@ -22,35 +23,38 @@ class Transfer_serial_async(asyncio.Protocol):
         print("Port Closed")
         asyncio.get_event_loop().stop()
 
-    def portopen(self):
+    def port_open(self):
         try:
-            self.open()
-            return self.is_open
-        except:
-            return "Port Open Faile"
+            self.transport.open()
+            return self.transport.serial.isOpen()
+        except Exception as e:
+            logging.error(f"Failed to open port: {e}")
+            return False
 
-    def portclose(self):
-        self.close()
+    def port_close(self):
+        self.transport.close()
         return "Port Close"
 
-    def writebyte(self, writestr: str):
+    def send_string_as_byte(self, writestr: str):
         try:
-            self.write(writestr.encode())
+            self.transport.write(writestr.encode())
             return "Send Start"
-        except:
-            return "Port Not Open"
+        except Exception as e:
+            logging.error(f"Failed to send data: {e}")
+            return False
 
     def readbyte(self):
         bytelist = []
         try:
             if self.in_waiting > 0:
-                for i in range(self.in_waiting):
-                    bytelist.append(self.read())
+                for i in range(self.transport.serial.in_waiting):
+                    bytelist.append(self.transport.serial.read())
                 print(type(bytelist[1]))
                 return "Read Start\n", bytelist
             else:
                 return "Read Faile\n", bytelist
-        except:
+        except Exception as e:
+            logging.error(f"Failed to read data: {e}")
             return "Read Faile\n", bytelist
 
     def readallbyte(self):
@@ -96,12 +100,6 @@ class Transfer_serial_async(asyncio.Protocol):
             return hex(initint)
         except:
             return ""
-
-    def serial_test(self):
-        text = ""
-        textlist = []
-        text, textlist = self.readallbyte()
-        return self.bytetoascii(textlist)
 
 
 # --- GUI ---
@@ -211,7 +209,8 @@ root["bg"] = "#e0ffff"
 
 app = App(root)
 
-root.mainloop()
+if __name__ == "__main__":
+    root.mainloop()
 
 
 # ---test code---
