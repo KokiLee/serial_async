@@ -4,7 +4,6 @@ import logging
 import os
 import tkinter as tk
 
-import numpy as np
 import serial_asyncio
 
 
