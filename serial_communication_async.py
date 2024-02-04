@@ -9,7 +9,7 @@ import serial_asyncio
 
 
 # Ser class modify
-class Transfer_serial_async(asyncio.Protocol):
+class AsyncSerialCommunicator(asyncio.Protocol):
     def connection_made(self, transport):
         self.transport = transport
         print("Port Opened", transport)
@@ -23,6 +23,11 @@ class Transfer_serial_async(asyncio.Protocol):
         print("Port Closed")
         asyncio.get_event_loop().stop()
 
+
+class SerialConfig:
+    def __init__(self, transport) -> None:
+        self.transport = transport
+
     def port_open(self):
         try:
             self.transport.open()
@@ -32,10 +37,19 @@ class Transfer_serial_async(asyncio.Protocol):
             return False
 
     def port_close(self):
-        self.transport.close()
-        return "Port Close"
+        try:
+            self.transport.close()
+            return True
+        except Exception as e:
+            logging.error(f"Failed to close port: {e}")
+        return False
 
-    def send_string_as_byte(self, writestr: str):
+
+class SerialCommunication:
+    def __init__(self, transport) -> None:
+        self.transport = transport
+
+    async def send_string_as_byte(self, writestr: str):
         try:
             self.transport.write(writestr.encode())
             return "Send Start"
@@ -43,7 +57,7 @@ class Transfer_serial_async(asyncio.Protocol):
             logging.error(f"Failed to send data: {e}")
             return False
 
-    def readbyte(self):
+    async def readbyte(self):
         bytelist = []
         try:
             if self.in_waiting > 0:
@@ -54,10 +68,10 @@ class Transfer_serial_async(asyncio.Protocol):
             else:
                 return "Read Faile\n", bytelist
         except Exception as e:
-            logging.error(f"Failed to read data: {e}")
+            logging.error(f"Failed to receive data: {e}")
             return "Read Faile\n", bytelist
 
-    def readallbyte(self):
+    async def readallbyte(self):
         bytelist = []
         try:
             byteall = self.readline()
@@ -65,10 +79,14 @@ class Transfer_serial_async(asyncio.Protocol):
             for i in byteall:  # type: ignore
                 bytelist.append(i.to_bytes(1, "big"))
             return "Read Start\n", bytelist
-        except:
+        except Exception as e:
+            logging.error(f"Failed to receive data: {e}")
             return "Read Faile\n", bytelist
 
-    def bytetoascii(self, bytelist: list, dec: str = "utf-8"):
+
+class DataParser:
+    @staticmethod
+    def byte_to_ascii(self, bytelist: list, dec: str = "utf-8"):
         """文字コードが違う場合は引数 dec で指定してください。デフォルトは utf-8"""
         decli = []
         try:
@@ -82,7 +100,7 @@ class Transfer_serial_async(asyncio.Protocol):
         except:
             return ""
 
-    def checkcode(
+    def parity_check(
         self, word: str, sbyte: bytes = b"\x02", ebyte: bytes = b"*", initint: int = 0
     ):
         """sbyte から ebyte の間でチェックコードを生成します。initint は初期値"""
@@ -114,14 +132,14 @@ class Tk_Button(tk.Button):
         self.configure(**kw)
 
 
-class App(tk.Frame, Transfer_serial_async):
+class App(tk.Frame, AsyncSerialCommunicator):
     def __init__(self, root) -> None:
         super().__init__(root, width=380, height=180, borderwidth=3, relief="groove")
         self.root = root
         self.pack()
         self.pack_propagate(True)
         self.create_widgets()
-        self.seri = Transfer_serial_async()
+        self.seri = AsyncSerialCommunicator()
 
     def text_box(self):
         pass
@@ -211,22 +229,3 @@ app = App(root)
 
 if __name__ == "__main__":
     root.mainloop()
-
-
-# ---test code---
-# ser = Ser()
-
-# print(ser.portopen())
-
-# # writestr = chr(0x02) + ", 2.068,0, 2.069,0, 2.070,0, 2.071,0, 4.040,0, 4.189,0, 4.190,0*16" + chr(0x03)
-# writestr = chr(0x02) + "0_0,0_0,0_0,100_0,51_0,-0.1_0,0_0,0.12_0,0.12_0" + chr(0x03)
-# print(ser.writebyte(writestr))
-
-# readtext,readlist = ser.readbyte()
-# print(readtext)
-# print(readlist)
-# print(ser.bytetoascii(readlist))
-# print(ser.checkcode(ser.bytetoascii(readlist),ebyte=b"\x03"))  # type: ignore
-# print(ser.portclose())
-
-# ---test code---
