@@ -100,23 +100,30 @@ class DataParser:
         except:
             return ""
 
-    def parity_check(
-        self, word: str, sbyte: bytes = b"\x02", ebyte: bytes = b"*", initint: int = 0
+    @staticmethod
+    async def parity_check(
+        lineData: str,
+        startText: bytes = b"\x02",
+        endText: bytes = b"*",
+        initialValue: int = 0,
     ):
-        """sbyte から ebyte の間でチェックコードを生成します。initint は初期値"""
-        int_list = []
+        """startText から endText の間でチェックコードを生成します。initialValue は初期値"""
         try:
-            int_list = [
-                int.from_bytes(i.encode(), byteorder="big")
-                for i in word
-                if i.encode() != sbyte
-            ]
-            for i in int_list:
-                if i.to_bytes(2, "big") == b"\x00*":
+            processing = False
+            for i in lineData:
+                if startText == endText:
+                    return ""
+
+                if i.encode() == startText:
+                    processing = True
+                    continue
+                elif i.encode() == endText:
                     break
-                initint = initint ^ i
-            return hex(initint)
-        except:
+                if processing:
+                    initialValue ^= ord(i)
+
+            return format(initialValue, "02x")
+        except Exception as e:
             return ""
 
 
