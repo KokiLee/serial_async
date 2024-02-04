@@ -1,12 +1,13 @@
 import unittest
 
-from transfer_serial import Transfer_serial_async
+from serial_communication_async import AsyncSerialCommunicator
 
 
+# need to modify
 class TestTransferSerialAsync(unittest.TestCase):
     def test_data_received(self):
         # Transfer_serial_async インスタンスを作成
-        transfer = Transfer_serial_async()
+        transfer = AsyncSerialCommunicator()
 
         # テストデータ
         test_data = b"Hello, World!"
