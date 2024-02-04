@@ -1,2 +1,2 @@
 # serial_async
-transfer serial and asyncio
+This program is still being developed.
