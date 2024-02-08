@@ -13,14 +13,11 @@ class AsyncSerialCommunicator(asyncio.Protocol):
         self.transport = transport
         print("port opened", transport)
         transport.serial.rts = False
-        self.config = SerialConfig(transport)
-        self.communication = SerialCommunication(transport)
-        transport.write(b"Hello World! abcdefghijklmn\n")
+        self.serial_communication = SerialCommunication(transport)
 
     def data_received(self, data):
         print("data received", repr(data))
-        if b"\n" in data:
-            self.transport.close()
+        self.pause_reading()
 
     def connection_lost(self, exc):
         self.transport.loop.stop()
@@ -33,42 +30,35 @@ class AsyncSerialCommunicator(asyncio.Protocol):
         print(self.transport.get_write_buffer_size())
         print("resume writing")
 
+    def pause_reading(self):
+        self.transport.pause_reading()
 
-class SerialConfig:
-    def __init__(self, transport) -> None:
-        self.transport = transport
-
-    def port_open(self):
-        logging.info("Port is successfully opend")
-
-    def port_close(self):
-        try:
-            self.transport.close()
-            return True
-        except Exception as e:
-            logging.error(f"Failed to close port: {e}")
-        return False
+    def resume_reading(self):
+        self.transport.resume_reading()
 
 
 class SerialCommunication:
     def __init__(self, transport) -> None:
         self.transport = transport
+        logging.info("port opend", transport)
 
     async def send_string_as_byte(self, writestr: str):
+        loop = asyncio.get_running_loop()
         try:
-            self.transport.write(writestr.encode())
-            return "Send Start"
+            await loop.run_in_executor(None, self.transport.write, writestr.encode())
+            logging.info("Send", self.transport)
+            return True
         except Exception as e:
             logging.error(f"Failed to send data: {e}")
             return False
 
-    async def read_available_bytes(self):
+    async def resume_reading(self):
         bytelist = []
         try:
-            if self.transport.serial.in_wating > 0:
+            if self.transport.serial.in_waiting > 0:
                 for i in range(self.transport.serial.in_waiting):
                     bytelist.append(self.transport.serial.read())
-                print(type(bytelist[1]))
+                # print(type(bytelist[1]))
                 return "Read Start\n", bytelist
             else:
                 return "Read Fail\n", bytelist
@@ -87,15 +77,6 @@ class SerialCommunication:
         except Exception as e:
             logging.error(f"Failed to receive data: {e}")
             return "Read Fail\n", bytelist
-
-    def data_received(self, data):
-        # 受信データを処理する
-        try:
-            decoded_data = data.decode("utf-8")  # 例: データをUTF-8でデコード
-            print(f"Received data: {decoded_data}")
-            # ここで受信データに基づいてさらなる処理を行う
-        except Exception as e:
-            logging.error(f"Failed to process received data: {e}")
 
 
 class DataParser:
@@ -120,7 +101,7 @@ class DataParser:
 
     @staticmethod
     async def parity_check(
-        byteData: bytes,
+        byteData: list,
         startText: bytes = b"\x02",
         endText: bytes = b"*",
         initialValue: int = 0,
@@ -133,14 +114,13 @@ class DataParser:
             checkValue = initialValue
 
             for byte in byteData:
-                if startText == endText:
-                    return ""
                 if byte == startText:
                     processing = True
                     continue
                 elif byte == endText:
                     break
                 if processing:
+                    print(type(byte), byte)
                     checkValue ^= ord(byte)
             return format(checkValue, "02x")
         except Exception as e:
@@ -151,19 +131,27 @@ class DataParser:
 bytelist = [b"\x02", b"1", b"c", b"*", b"\x03"]
 
 
-# serial port setting
-port = "COM3"
-baudrate = 9600
+async def readerAndWriter():
+    # logging.basicConfig(level=logging.INFO)
+
+    # serial port setting
+    port = "COM3"
+    baudrate = 9600
+
+    transport, protocol = await serial_asyncio.create_serial_connection(
+        loop, AsyncSerialCommunicator, port, baudrate=baudrate
+    )
+
+    while True:
+        await asyncio.sleep(0.3)
+        await protocol.serial_communication.send_string_as_byte("Hello World!")
+
+        test = await protocol.serial_communication.resume_reading()
+        print(type(test[1]), test[1])
+        test1 = await DataParser.parity_check(test, startText=None, endText=None)
+        print(test1)
+
 
 loop = asyncio.get_event_loop()
-coro = serial_asyncio.create_serial_connection(
-    loop, AsyncSerialCommunicator, "COM3", baudrate=baudrate
-)
-transport, protocol = loop.run_until_complete(coro)
-loop.run_forever()
+loop.run_until_complete(readerAndWriter())
 loop.close()
-# result1 = await DataParser.parity_check(data)
-# print(type(result1), result1)
-
-
-# main関数を実行
