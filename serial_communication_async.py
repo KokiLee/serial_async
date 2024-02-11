@@ -2,6 +2,7 @@ import asyncio
 import configparser
 import logging
 import os
+import threading
 import tkinter as tk
 
 import serial_asyncio
@@ -9,30 +10,43 @@ import serial_asyncio
 
 # Ser class modify
 class AsyncSerialCommunicator(asyncio.Protocol):
+    # called by asyncio when establishment a connection.
+    # Save transport object to instance variable and Make instance of SrialCommunication class.
+    # "Request to send" to disable.
     def connection_made(self, transport):
         self.transport = transport
         print("port opened", transport)
         transport.serial.rts = False
         self.serial_communication = SerialCommunication(transport)
 
+    # data-received-class is for data receive. data-received-class called by asyncio.
+    # This method displays receive data. data reading paused.
     def data_received(self, data):
         print("data received", repr(data))
         self.pause_reading()
 
+    # called by asyncio when connection lost. "exc" parameter is an exception object.
+    # if the connection is correctly closed,no exception will occur.
     def connection_lost(self, exc):
         self.transport.loop.stop()
 
+    # if writing buffer is upper limmit,called by asyncio.
     def pause_writing(self):
         print("pause writing")
         print(self.transport.get_write_buffer_size())
 
+    # Called by asyncio when writing buffer is the acceptable range.
+    # This method is used to resume writing.
     def resume_writing(self):
         print(self.transport.get_write_buffer_size())
         print("resume writing")
 
+    # This method is used to pause data reading.
+    # If data processing data takes a long time, or buffer overflow prevents reading, reading may be paused.
     def pause_reading(self):
         self.transport.pause_reading()
 
+    # This method resumes reading paused data.
     def resume_reading(self):
         self.transport.resume_reading()
 
@@ -148,14 +162,14 @@ async def readerAndWriter(loop):
             await asyncio.sleep(0.3)
             await protocol.serial_communication.send_string_as_byte(
                 # chr(0x02)
-                "Yesterday, I had an accident.\n I was cleaning my room.\n I used the vacuum cleaner.\n I pulled the chair and cleaned under it.\n Then I pulled the desk and under it.\n I wanted to clean under the bed next.\n"
+                "Yesterday,I had an accident.\n I was cleaning my room.\nI used the vacuum cleaner.\nI pulled the chair and cleaned under it.\nThen I pulled the desk and cleaned under it.\nI wanted to cleaned under the bed next.\n"
             )
 
             test = await protocol.serial_communication.read_serial_data_as_byte_list()
             # test = await protocol.serial_communication.read_line_as_bytes()
             print(type(test[1]), test[1])
             test1 = await DataParser.parity_check(
-                test[1], startText=None, endText=None
+                test[1], startText=None, endText=None, initialValue=0
             )
             print(test1)
             test2 = await DataParser.byte_to_ascii(test[1])
