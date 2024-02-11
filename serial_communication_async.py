@@ -52,13 +52,12 @@ class SerialCommunication:
             logging.error(f"Failed to send data: {e}")
             return False
 
-    async def resume_reading(self):
+    async def read_serial_data_as_byte_list(self):
         bytelist = []
         try:
             if self.transport.serial.in_waiting > 0:
                 for i in range(self.transport.serial.in_waiting):
                     bytelist.append(self.transport.serial.read())
-                # print(type(bytelist[1]))
                 return "Read Start\n", bytelist
             else:
                 return "Read Fail\n", bytelist
@@ -78,11 +77,16 @@ class SerialCommunication:
             logging.error(f"Failed to receive data: {e}")
             return "Read Fail\n", bytelist
 
+    def close_port(self):
+        if self.transport:
+            self.transport.close()
+            logging.info("Serial port closed")
+
 
 class DataParser:
     @staticmethod
     async def byte_to_ascii(
-        bytelist: list,
+        bytelist: bytes,
         dec: str = "utf-8",
         startText: bytes = b"\x02",
         endText: bytes = b"\x03",
@@ -90,18 +94,17 @@ class DataParser:
         """文字コードが違う場合は引数 dec で指定してください。デフォルトは utf-8"""
         decli = []
         try:
-            if startText == bytelist[0]:
-                for i in bytelist:
-                    if i == endText:
-                        break
-                    decli.append(i.decode(dec))
-                return "".join(decli)
+            for i in bytelist:
+                if i == endText:
+                    break
+                decli.append(i.decode(dec))
+            return "".join(decli)
         except Exception as e:
             logging.error(f"No data: {e}")
 
     @staticmethod
     async def parity_check(
-        byteData: list,
+        byteData: bytes,
         startText: bytes = b"\x02",
         endText: bytes = b"*",
         initialValue: int = 0,
@@ -120,7 +123,6 @@ class DataParser:
                 elif byte == endText:
                     break
                 if processing:
-                    print(type(byte), byte)
                     checkValue ^= ord(byte)
             return format(checkValue, "02x")
         except Exception as e:
@@ -131,7 +133,7 @@ class DataParser:
 bytelist = [b"\x02", b"1", b"c", b"*", b"\x03"]
 
 
-async def readerAndWriter():
+async def readerAndWriter(loop):
     # logging.basicConfig(level=logging.INFO)
 
     # serial port setting
@@ -141,17 +143,52 @@ async def readerAndWriter():
     transport, protocol = await serial_asyncio.create_serial_connection(
         loop, AsyncSerialCommunicator, port, baudrate=baudrate
     )
+    try:
+        while True:
+            await asyncio.sleep(0.3)
+            await protocol.serial_communication.send_string_as_byte(
+                # chr(0x02)
+                "Yesterday, I had an accident.\n I was cleaning my room.\n I used the vacuum cleaner.\n I pulled the chair and cleaned under it.\n Then I pulled the desk and under it.\n I wanted to clean under the bed next.\n"
+            )
 
-    while True:
-        await asyncio.sleep(0.3)
-        await protocol.serial_communication.send_string_as_byte("Hello World!")
+            test = await protocol.serial_communication.read_serial_data_as_byte_list()
+            # test = await protocol.serial_communication.read_line_as_bytes()
+            print(type(test[1]), test[1])
+            test1 = await DataParser.parity_check(
+                test[1], startText=None, endText=None
+            )
+            print(test1)
+            test2 = await DataParser.byte_to_ascii(test[1])
+            print(test2)
 
-        test = await protocol.serial_communication.resume_reading()
-        print(type(test[1]), test[1])
-        test1 = await DataParser.parity_check(test, startText=None, endText=None)
-        print(test1)
+    except asyncio.CancelledError:
+        print("Task was cancelled")
+
+    finally:
+        protocol.serial_communication.close_port()
 
 
-loop = asyncio.get_event_loop()
-loop.run_until_complete(readerAndWriter())
-loop.close()
+async def main(loop):
+    task = loop.create_task(readerAndWriter(loop))
+    try:
+        await task
+
+    except asyncio.CancelledError:
+        print("Task was cancelled")
+
+
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(readerAndWriter(loop))
+
+    except KeyboardInterrupt:
+        # Ctrl + c Program was stoped
+        print("Program terminated by user")
+        for task in asyncio.all_tasks(loop):
+            task.cancel()
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.stop()
+
+    finally:
+        loop.close()
