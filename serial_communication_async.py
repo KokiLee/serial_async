@@ -155,12 +155,9 @@ class DataParser:
     @staticmethod
     async def adjust_angle_async(current_angle, previous_angle):
         """
-        角度のサガ180度超える場合にオーバーフローまたはアンダーフローを修正する。
-        :param current_angle: 現在の角度
-        :param previous_angle: 前回の角度
-        :return: 調整された角度
+        Corrected overflow and underflow when angular difference exceeding 180 degree
+        :return: corrected angle
         """
-
         if previous_angle != 0:
             angle_diff = current_angle - previous_angle
             if angle_diff > 180:
