@@ -1,11 +1,19 @@
 import asyncio
 import configparser
 import logging
+import math
 import os
 import threading
+import time
 import tkinter as tk
 
+import chardet
+import matplotlib.pyplot as plt
+import numpy as np
 import serial_asyncio
+from matplotlib.animation import FuncAnimation
+
+# from vpython import box, rate, vector
 
 
 # Ser class modify
@@ -72,24 +80,21 @@ class SerialCommunication:
             if self.transport.serial.in_waiting > 0:
                 for i in range(self.transport.serial.in_waiting):
                     bytelist.append(self.transport.serial.read())
-                return "Read Start\n", bytelist
-            else:
-                return "Read Fail\n", bytelist
+                return bytelist
         except Exception as e:
             logging.error(f"Failed to receive data: {e}")
-            return "Read Faile\n", bytelist
+            return False
 
     async def read_line_as_bytes(self):
         bytelist = []
         try:
             byteall = self.transport.serial.readline()
-            print(byteall)
             for i in byteall:
                 bytelist.append(i.to_bytes(1, "big"))
-            return "Read Start\n", bytelist
+            return bytelist
         except Exception as e:
             logging.error(f"Failed to receive data: {e}")
-            return "Read Fail\n", bytelist
+            return bytelist
 
     def close_port(self):
         if self.transport:
@@ -100,21 +105,24 @@ class SerialCommunication:
 class DataParser:
     @staticmethod
     async def byte_to_ascii(
-        bytelist: bytes,
+        byteData: bytes,
         dec: str = "utf-8",
         startText: bytes = b"\x02",
         endText: bytes = b"\x03",
     ):
         """文字コードが違う場合は引数 dec で指定してください。デフォルトは utf-8"""
-        decli = []
-        try:
-            for i in bytelist:
-                if i == endText:
-                    break
-                decli.append(i.decode(dec))
-            return "".join(decli)
-        except Exception as e:
-            logging.error(f"No data: {e}")
+        decodelist = []
+        if byteData is not None:
+            try:
+                for i in byteData:
+                    if ascii_control_codes.get(i) is not None:
+                        decodelist.append(ascii_control_codes.get(i))
+                    if i == endText:
+                        break
+                    decodelist.append(i.decode(dec))
+                return "".join(decodelist)
+            except Exception as e:
+                logging.error(f"No data: {e}")
 
     @staticmethod
     async def parity_check(
@@ -126,60 +134,207 @@ class DataParser:
         """startText から endText の間でチェックコードを生成します。initialValue は初期値
         startText と endText でデータの開始と終了を指定します。
         """
+        if byteData is not None:
+            try:
+                processing = True if startText is None else False
+                checkValue = initialValue
+
+                for byte in byteData:
+                    if byte == startText:
+                        processing = True
+                        continue
+                    elif byte == endText:
+                        break
+                    if processing:
+                        checkValue ^= ord(byte)
+                return format(checkValue, "02x")
+            except Exception as e:
+                logging.error(f"Fail parity check: {e}")
+                return False
+
+    @staticmethod
+    async def adjust_angle_async(current_angle, previous_angle):
+        """
+        角度のサガ180度超える場合にオーバーフローまたはアンダーフローを修正する。
+        :param current_angle: 現在の角度
+        :param previous_angle: 前回の角度
+        :return: 調整された角度
+        """
+
+        if previous_angle != 0:
+            angle_diff = current_angle - previous_angle
+            if angle_diff > 180:
+                current_angle -= 360
+            elif angle_diff < -180:
+                current_angle += 360
+        return current_angle
+
+    @staticmethod
+    async def witmotion_standard_protocol_angular(data):
+        previous_roll = 0
+        previous_pitch = 0
+        previous_yaw = 0
+        roll = None
+        pitch = None
+        yaw = None
         try:
-            processing = True if startText is None else False
-            checkValue = initialValue
+            for i in range(len(data) - 1):
+                if data[i] == b"\x55" and data[i + 1] == b"\x53":
 
-            for byte in byteData:
-                if byte == startText:
-                    processing = True
-                    continue
-                elif byte == endText:
-                    break
-                if processing:
-                    checkValue ^= ord(byte)
-            return format(checkValue, "02x")
-        except Exception as e:
-            logging.error(f"Fail parity check: {e}")
-            return False
+                    roll_H = int.from_bytes(
+                        data[i + 3], byteorder="little", signed=True
+                    )
+                    roll_L = int.from_bytes(
+                        data[i + 2], byteorder="little", signed=True
+                    )
+                    # ((roll_H << 8) + roll_L) = Current angle
+                    roll = ((roll_H << 8) + roll_L) / 32768.0 * 180
+
+                    pitch_L = int.from_bytes(
+                        data[i + 4], byteorder="little", signed=True
+                    )
+                    pitch_H = int.from_bytes(
+                        data[i + 5], byteorder="little", signed=True
+                    )
+
+                    pitch = ((pitch_H << 8) + pitch_L) / 32768.0 * 180
+
+                    yaw_H = int.from_bytes(
+                        data[i + 7], byteorder="little", signed=True
+                    )
+                    yaw_L = int.from_bytes(
+                        data[i + 6], byteorder="little", signed=True
+                    )
+
+                    yaw = ((yaw_H << 8) + yaw_L) / 32768.0 * 180
+
+                    # Implemented a solution to correct overflow and underflow in sensor data processing.
+                    roll = await DataParser.adjust_angle_async(roll, previous_roll)
+                    pitch = await DataParser.adjust_angle_async(pitch, previous_pitch)
+                    yaw = await DataParser.adjust_angle_async(yaw, previous_yaw)
+
+            return roll, pitch, yaw
+        except:
+            pass
 
 
-bytelist = [b"\x02", b"1", b"c", b"*", b"\x03"]
+ascii_control_codes = {
+    b"\x00": "NUL (Null char)",
+    b"\x01": "SOH (Start of Heading)",
+    b"\x02": "STX (Start of Text)",
+    b"\x03": "ETX (End of Text)",
+    b"\x04": "EOT (End of Transmission)",
+    b"\x05": "ENQ (Enquiry)",
+    b"\x06": "ACK (Acknowledge)",
+    b"\x07": "BEL (Bell)",
+    b"\x08": "BS (Backspace)",
+    b"\x09": "HT (Horizontal Tab)",
+    b"\x0A": "LF (Line Feed)",
+    b"\x0B": "VT (Vertical Tab)",
+    b"\x0C": "FF (Form Feed)",
+    b"\x0D": "CR (Carriage Return)",
+    b"\x0E": "SO (Shift Out)",
+    b"\x0F": "SI (Shift In)",
+    b"\x10": "DLE (Data Link Escape)",
+    b"\x11": "DC1 (Device Control 1)",
+    b"\x12": "DC2 (Device Control 2)",
+    b"\x13": "DC3 (Device Control 3)",
+    b"\x14": "DC4 (Device Control 4)",
+    b"\x15": "NAK (Negative Acknowledge)",
+    b"\x16": "SYN (Synchronous Idle)",
+    b"\x17": "ETB (End of Transmission Block)",
+    b"\x18": "CAN (Cancel)",
+    b"\x19": "EM (End of Medium)",
+    b"\x1A": "SUB (Substitute)",
+    b"\x1B": "ESC (Escape)",
+    b"\x1C": "FS (File Separator)",
+    b"\x1D": "GS (Group Separator)",
+    b"\x1E": "RS (Record Separator)",
+    b"\x1F": "US (Unit Separator)",
+    b"\x7F": "DEL (Delete)",
+}
+
+
+roll_data = []
+pitch_data = []
+yaw_data = []
+
+fig, ax = plt.subplots()
+
+
+def update_plot():
+    ax.clear()  # グラフをクリア
+    ax.plot(roll_data, label="Roll")
+    ax.plot(pitch_data, label="Pitch")
+    ax.plot(yaw_data, label="Yawing")
+    ax.legend()
+    plt.draw()
+    plt.pause(0.01)
+
+
+ani = FuncAnimation(fig, update_plot, interval=1000)
+
+
+async def add_data_for_plot(data):
+    global roll_data, pitch_data, yaw_data
+    roll_data.append(data[0])
+    pitch_data.append(data[1])
+    yaw_data.append(data[2])
+    # リストが長くなりすぎないように制限
+    if len(roll_data) > 100:
+        roll_data.pop(0)
+        pitch_data.pop(0)
+        yaw_data.pop(0)
+    update_plot()
 
 
 async def readerAndWriter(loop):
     # logging.basicConfig(level=logging.INFO)
 
     # serial port setting
-    port = "COM3"
+    port = "COM4"
     baudrate = 9600
+    bytesize = 8
+    parity = "N"
+    stopbits = 1
+    timeout = 0
+    xonxoff = False
+    rtscts = False
+    dsrdtr = False
+    waite_time = 0.1
 
-    transport, protocol = await serial_asyncio.create_serial_connection(
-        loop, AsyncSerialCommunicator, port, baudrate=baudrate
-    )
+    transport = None
+    protocol = None
+
     try:
+        transport, protocol = await serial_asyncio.create_serial_connection(
+            loop, AsyncSerialCommunicator, port, baudrate=baudrate
+        )
+
         while True:
-            await asyncio.sleep(0.3)
-            await protocol.serial_communication.send_string_as_byte(
-                # chr(0x02)
-                "Yesterday,I had an accident.\n I was cleaning my room.\nI used the vacuum cleaner.\nI pulled the chair and cleaned under it.\nThen I pulled the desk and cleaned under it.\nI wanted to cleaned under the bed next.\n"
-            )
+            await asyncio.sleep(waite_time)
+
+            # await protocol.serial_communication.send_string_as_byte(
+            #     chr(0x02)
+            #     + "Yesterday,I had an accident.\nI was cleaning my room.\nI used the vacuum cleaner.\nI pulled the chair and cleaned under it.\nThen I pulled the desk and cleaned under it.\nI wanted to cleaned under the bed next.\n"
+            # )
 
             test = await protocol.serial_communication.read_serial_data_as_byte_list()
             # test = await protocol.serial_communication.read_line_as_bytes()
-            print(type(test[1]), test[1])
-            test1 = await DataParser.parity_check(
-                test[1], startText=None, endText=None, initialValue=0
-            )
-            print(test1)
-            test2 = await DataParser.byte_to_ascii(test[1])
-            print(test2)
+            # print(test)
+            wit_test = await DataParser.witmotion_standard_protocol_angular(test)
+            print(wit_test)
+            if wit_test is not None:
+                await add_data_for_plot(wit_test)
 
     except asyncio.CancelledError:
         print("Task was cancelled")
 
     finally:
-        protocol.serial_communication.close_port()
+        if protocol is not None:
+            protocol.serial_communication.close_port()
+        if transport is not None:
+            transport.close()
 
 
 async def main(loop):
@@ -193,6 +348,7 @@ async def main(loop):
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
+    plt.show(block=False)
     try:
         loop.run_until_complete(readerAndWriter(loop))
 
