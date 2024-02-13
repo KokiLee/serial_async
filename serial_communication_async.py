@@ -4,16 +4,18 @@ import logging
 import math
 import os
 import threading
-import time
-import tkinter as tk
+from logging.handlers import RotatingFileHandler
 
-import chardet
 import matplotlib.pyplot as plt
-import numpy as np
 import serial_asyncio
 from matplotlib.animation import FuncAnimation
 
-# from vpython import box, rate, vector
+handler = RotatingFileHandler("app.log", maxBytes=6000000, backupCount=5)
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+handler.setFormatter(formatter)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.addHandler(handler)
 
 
 # Ser class modify
@@ -62,16 +64,16 @@ class AsyncSerialCommunicator(asyncio.Protocol):
 class SerialCommunication:
     def __init__(self, transport) -> None:
         self.transport = transport
-        logging.info("port opend", transport)
+        logger.info("port opend", transport)
 
     async def send_string_as_byte(self, writestr: str):
         loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(None, self.transport.write, writestr.encode())
-            logging.info("Send", self.transport)
+            logger.info("Send", self.transport)
             return True
         except Exception as e:
-            logging.error(f"Failed to send data: {e}")
+            logger.error(f"Failed to send data: {e}")
             return False
 
     async def read_serial_data_as_byte_list(self):
@@ -82,7 +84,7 @@ class SerialCommunication:
                     bytelist.append(self.transport.serial.read())
                 return bytelist
         except Exception as e:
-            logging.error(f"Failed to receive data: {e}")
+            logger.error(f"Failed to receive data: {e}")
             return False
 
     async def read_line_as_bytes(self):
@@ -93,13 +95,13 @@ class SerialCommunication:
                 bytelist.append(i.to_bytes(1, "big"))
             return bytelist
         except Exception as e:
-            logging.error(f"Failed to receive data: {e}")
+            logger.error(f"Failed to receive data: {e}")
             return bytelist
 
     def close_port(self):
         if self.transport:
             self.transport.close()
-            logging.info("Serial port closed")
+            logger.info("Serial port closed")
 
 
 class DataParser:
@@ -122,7 +124,7 @@ class DataParser:
                     decodelist.append(i.decode(dec))
                 return "".join(decodelist)
             except Exception as e:
-                logging.error(f"No data: {e}")
+                logger.error(f"No data: {e}")
 
     @staticmethod
     async def parity_check(
@@ -149,7 +151,7 @@ class DataParser:
                         checkValue ^= ord(byte)
                 return format(checkValue, "02x")
             except Exception as e:
-                logging.error(f"Fail parity check: {e}")
+                logger.error(f"Fail parity check: {e}")
                 return False
 
     @staticmethod
@@ -256,20 +258,20 @@ roll_data = []
 pitch_data = []
 yaw_data = []
 
-fig, ax = plt.subplots()
 
+def plot_data():
+    fig, ax = plt.subplots()
 
-def update_plot():
-    ax.clear()  # グラフをクリア
-    ax.plot(roll_data, label="Roll")
-    ax.plot(pitch_data, label="Pitch")
-    ax.plot(yaw_data, label="Yawing")
-    ax.legend()
-    plt.draw()
-    plt.pause(0.01)
+    def update_plot(i):
+        ax.clear()
+        if roll_data and pitch_data and yaw_data:
+            ax.plot(roll_data, label="Roll")
+            ax.plot(pitch_data, label="Pitch")
+            ax.plot(yaw_data, label="Yawing")
+            ax.legend()
 
-
-ani = FuncAnimation(fig, update_plot, interval=1000)
+    ani = FuncAnimation(fig, update_plot, interval=100, save_count=100)
+    plt.show()
 
 
 async def add_data_for_plot(data):
@@ -282,7 +284,13 @@ async def add_data_for_plot(data):
         roll_data.pop(0)
         pitch_data.pop(0)
         yaw_data.pop(0)
-    update_plot()
+
+
+def start_asyncio_loop():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(readerAndWriter(loop))
+    loop.close
 
 
 async def readerAndWriter(loop):
@@ -320,9 +328,11 @@ async def readerAndWriter(loop):
             # test = await protocol.serial_communication.read_line_as_bytes()
             # print(test)
             wit_test = await DataParser.witmotion_standard_protocol_angular(test)
-            print(wit_test)
+
             if wit_test is not None:
                 await add_data_for_plot(wit_test)
+                print(wit_test)
+                logger.info(wit_test)
 
     except asyncio.CancelledError:
         print("Task was cancelled")
@@ -334,28 +344,13 @@ async def readerAndWriter(loop):
             transport.close()
 
 
-async def main(loop):
-    task = loop.create_task(readerAndWriter(loop))
-    try:
-        await task
+def main():
+    async_thread = threading.Thread(target=start_asyncio_loop)
+    async_thread.daemon = True
+    async_thread.start()
 
-    except asyncio.CancelledError:
-        print("Task was cancelled")
+    plot_data()
 
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    plt.show(block=False)
-    try:
-        loop.run_until_complete(readerAndWriter(loop))
-
-    except KeyboardInterrupt:
-        # Ctrl + c Program was stoped
-        print("Program terminated by user")
-        for task in asyncio.all_tasks(loop):
-            task.cancel()
-        loop.run_until_complete(loop.shutdown_asyncgens())
-        loop.stop()
-
-    finally:
-        loop.close()
+    main()
