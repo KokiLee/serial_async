@@ -114,7 +114,7 @@ class DataParser:
         startText: bytes = b"\x02",
         endText: bytes = b"\x03",
     ):
-        """文字コードが違う場合は引数 dec で指定してください。デフォルトは utf-8"""
+        """Please specify the character encoding using the dec argument if it differs. The default is utf-8."""
         decodelist = []
         if byteData is not None:
             try:
@@ -135,8 +135,8 @@ class DataParser:
         endText: bytes = b"*",
         initialValue: int = 0,
     ):
-        """startText から endText の間でチェックコードを生成します。initialValue は初期値
-        startText と endText でデータの開始と終了を指定します。
+        """Generates a checksum between starttext and endtext.
+        starttext and endtext specify start data and end data.
         """
         if byteData is not None:
             try:
@@ -182,10 +182,10 @@ class DataParser:
             for i in range(len(data) - 1):
                 if data[i] == 0x55 and data[i + 1] == 0x53:
                     # if data[i] == 85 and data[i + 1] == 83:
-                    # バイト値：単一のバイトを表す整数。例：85または0x55
-                    # バイト文字列：一つ以上のバイト値を含むシーケンス。例：b"\x55"
+                    # Byte value: An integer representing a single byte. Example: 85 or 0x55
+                    # Byte string: A sequence containing one or more byte values. Example: b"\x55"
 
-                    # バイト列して組み合わせる。
+                    # Combine as a byte sequence.
                     roll_L_H = bytes([data[i + 2], data[i + 3]])
                     combined_roll = int.from_bytes(
                         roll_L_H, byteorder="little", signed=True
