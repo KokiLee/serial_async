@@ -1,14 +1,15 @@
 import asyncio
 import configparser
 import logging
-import math
-import os
+import queue
 import threading
 from logging.handlers import RotatingFileHandler
 
 import matplotlib.pyplot as plt
 import serial_asyncio
 from matplotlib.animation import FuncAnimation
+
+from constants import ascii_control_codes
 
 handler = RotatingFileHandler("app.log", maxBytes=6000000, backupCount=5)
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -77,12 +78,13 @@ class SerialCommunication:
             return False
 
     async def read_serial_data_as_byte_list(self):
-        bytelist = []
+        data = bytearray()
         try:
             if self.transport.serial.in_waiting > 0:
-                for i in range(self.transport.serial.in_waiting):
-                    bytelist.append(self.transport.serial.read())
-                return bytelist
+                data.extend(
+                    self.transport.serial.read(self.transport.serial.in_waiting)
+                )
+            return bytes(data)
         except Exception as e:
             logger.error(f"Failed to receive data: {e}")
             return False
@@ -178,34 +180,29 @@ class DataParser:
         yaw = None
         try:
             for i in range(len(data) - 1):
-                if data[i] == b"\x55" and data[i + 1] == b"\x53":
+                if data[i] == 0x55 and data[i + 1] == 0x53:
+                    # if data[i] == 85 and data[i + 1] == 83:
+                    # バイト値：単一のバイトを表す整数。例：85または0x55
+                    # バイト文字列：一つ以上のバイト値を含むシーケンス。例：b"\x55"
 
-                    roll_H = int.from_bytes(
-                        data[i + 3], byteorder="little", signed=True
+                    # バイト列して組み合わせる。
+                    roll_L_H = bytes([data[i + 2], data[i + 3]])
+                    combined_roll = int.from_bytes(
+                        roll_L_H, byteorder="little", signed=True
                     )
-                    roll_L = int.from_bytes(
-                        data[i + 2], byteorder="little", signed=True
-                    )
-                    # ((roll_H << 8) + roll_L) = Current angle
-                    roll = ((roll_H << 8) + roll_L) / 32768.0 * 180
+                    roll = combined_roll / 32768.0 * 180
 
-                    pitch_L = int.from_bytes(
-                        data[i + 4], byteorder="little", signed=True
+                    pitch_L_H = bytes([data[i + 4], data[i + 5]])
+                    combined_pitch = int.from_bytes(
+                        pitch_L_H, byteorder="little", signed=True
                     )
-                    pitch_H = int.from_bytes(
-                        data[i + 5], byteorder="little", signed=True
-                    )
+                    pitch = combined_pitch / 32768.0 * 180
 
-                    pitch = ((pitch_H << 8) + pitch_L) / 32768.0 * 180
-
-                    yaw_H = int.from_bytes(
-                        data[i + 7], byteorder="little", signed=True
+                    yaw_L_H = bytes([data[i + 6], data[i + 7]])
+                    combined_yaw = int.from_bytes(
+                        yaw_L_H, byteorder="little", signed=True
                     )
-                    yaw_L = int.from_bytes(
-                        data[i + 6], byteorder="little", signed=True
-                    )
-
-                    yaw = ((yaw_H << 8) + yaw_L) / 32768.0 * 180
+                    yaw = combined_yaw / 32768.0 * 180
 
                     # Implemented a solution to correct overflow and underflow in sensor data processing.
                     roll = await DataParser.adjust_angle_async(roll, previous_roll)
@@ -213,143 +210,140 @@ class DataParser:
                     yaw = await DataParser.adjust_angle_async(yaw, previous_yaw)
 
             return roll, pitch, yaw
+        except Exception as e:
+            logger.error("Data do not percer")
+
+
+class DataPlotter:
+    def __init__(self) -> None:
+        self.data_queue = queue.Queue()
+        self.roll_data = []
+        self.pitch_data = []
+        self.yaw_data = []
+        self.fig, self.ax = plt.subplots()
+        self.ani = FuncAnimation(
+            self.fig, self.update_plot, interval=100, save_count=150
+        )
+
+    def update_plot(self, _):
+        try:
+            while not self.data_queue.empty():
+                data = self.data_queue.get_nowait()
+                if data is None:
+                    continue
+                self.roll_data.append(data[0])
+                self.pitch_data.append(data[1])
+                self.yaw_data.append(data[2])
+                if len(self.roll_data) > 100:
+                    self.roll_data.pop(0)
+                    self.pitch_data.pop(0)
+                    self.yaw_data.pop(0)
+            self.fig.update()
         except:
             pass
 
+        self.ax.clear()
+        if self.roll_data and self.pitch_data and self.yaw_data:
+            self.ax.plot(self.roll_data, label="Roll")
+            self.ax.plot(self.pitch_data, label="Pitch")
+            self.ax.plot(self.yaw_data, label="Yaw")
+            self.ax.legend()
 
-ascii_control_codes = {
-    b"\x00": "NUL (Null char)",
-    b"\x01": "SOH (Start of Heading)",
-    b"\x02": "STX (Start of Text)",
-    b"\x03": "ETX (End of Text)",
-    b"\x04": "EOT (End of Transmission)",
-    b"\x05": "ENQ (Enquiry)",
-    b"\x06": "ACK (Acknowledge)",
-    b"\x07": "BEL (Bell)",
-    b"\x08": "BS (Backspace)",
-    b"\x09": "HT (Horizontal Tab)",
-    b"\x0A": "LF (Line Feed)",
-    b"\x0B": "VT (Vertical Tab)",
-    b"\x0C": "FF (Form Feed)",
-    b"\x0D": "CR (Carriage Return)",
-    b"\x0E": "SO (Shift Out)",
-    b"\x0F": "SI (Shift In)",
-    b"\x10": "DLE (Data Link Escape)",
-    b"\x11": "DC1 (Device Control 1)",
-    b"\x12": "DC2 (Device Control 2)",
-    b"\x13": "DC3 (Device Control 3)",
-    b"\x14": "DC4 (Device Control 4)",
-    b"\x15": "NAK (Negative Acknowledge)",
-    b"\x16": "SYN (Synchronous Idle)",
-    b"\x17": "ETB (End of Transmission Block)",
-    b"\x18": "CAN (Cancel)",
-    b"\x19": "EM (End of Medium)",
-    b"\x1A": "SUB (Substitute)",
-    b"\x1B": "ESC (Escape)",
-    b"\x1C": "FS (File Separator)",
-    b"\x1D": "GS (Group Separator)",
-    b"\x1E": "RS (Record Separator)",
-    b"\x1F": "US (Unit Separator)",
-    b"\x7F": "DEL (Delete)",
-}
+    def add_data(self, data):
+        self.data_queue.put(data)
+
+    def show(self):
+        plt.show()
 
 
-roll_data = []
-pitch_data = []
-yaw_data = []
+class AsyncSerialManager:
+    def __init__(
+        self,
+        port,
+        baudrate,
+        bytesize=8,
+        parity="N",
+        stopbits=1,
+        timeout=None,
+        xonxoff=False,
+        rtscts=False,
+        dsrdtr=False,
+        waittime=0.1,
+        plotter=None,
+    ) -> None:
+        self.port = port
+        self.baudrate = baudrate
+        self.bytesize = bytesize
+        self.parity = parity
+        self.stopbits = stopbits
+        self.timeout = timeout
+        self.xonxoff = xonxoff
+        self.rtscts = rtscts
+        self.dsrdtr = dsrdtr
+        self.waittime = waittime
 
+        # self.loop = asyncio.get_event_loop()
+        self.protocol = None
+        self.transport = None
 
-def plot_data():
-    fig, ax = plt.subplots()
+        self.plotter = plotter
 
-    def update_plot(i):
-        ax.clear()
-        if roll_data and pitch_data and yaw_data:
-            ax.plot(roll_data, label="Roll")
-            ax.plot(pitch_data, label="Pitch")
-            ax.plot(yaw_data, label="Yawing")
-            ax.legend()
+    def start_asyncio_loop(self):
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self.sensor_angular_output_reader())
+        self.loop.close()
 
-    ani = FuncAnimation(fig, update_plot, interval=100, save_count=100)
-    plt.show()
+    async def sensor_angular_output_reader(self):
+        loop = asyncio.get_running_loop()
+        try:
+            self.transport, self.protocol = (
+                await serial_asyncio.create_serial_connection(
+                    loop,
+                    AsyncSerialCommunicator,
+                    self.port,
+                    baudrate=self.baudrate,
+                )
+            )
 
+            while True:
+                await asyncio.sleep(self.waittime)
 
-async def add_data_for_plot(data):
-    global roll_data, pitch_data, yaw_data
-    roll_data.append(data[0])
-    pitch_data.append(data[1])
-    yaw_data.append(data[2])
-    # リストが長くなりすぎないように制限
-    if len(roll_data) > 100:
-        roll_data.pop(0)
-        pitch_data.pop(0)
-        yaw_data.pop(0)
+                raw_angular_output_data = (
+                    await self.protocol.serial_communication.read_serial_data_as_byte_list()
+                )
 
+                # print(raw_angular_output_data)
 
-def start_asyncio_loop():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(readerAndWriter(loop))
-    loop.close
+                angular_output_data = (
+                    await DataParser.witmotion_standard_protocol_angular(
+                        raw_angular_output_data
+                    )
+                )
 
+                if angular_output_data is not None:
+                    logger.info(angular_output_data)
+                    self.plotter.add_data(angular_output_data)
 
-async def readerAndWriter(loop):
-    # logging.basicConfig(level=logging.INFO)
+        except asyncio.CancelledError:
+            print("Task was cancelled")
 
-    # serial port setting
-    port = "COM4"
-    baudrate = 9600
-    bytesize = 8
-    parity = "N"
-    stopbits = 1
-    timeout = 0
-    xonxoff = False
-    rtscts = False
-    dsrdtr = False
-    waite_time = 0.1
-
-    transport = None
-    protocol = None
-
-    try:
-        transport, protocol = await serial_asyncio.create_serial_connection(
-            loop, AsyncSerialCommunicator, port, baudrate=baudrate
-        )
-
-        while True:
-            await asyncio.sleep(waite_time)
-
-            # await protocol.serial_communication.send_string_as_byte(
-            #     chr(0x02)
-            #     + "Yesterday,I had an accident.\nI was cleaning my room.\nI used the vacuum cleaner.\nI pulled the chair and cleaned under it.\nThen I pulled the desk and cleaned under it.\nI wanted to cleaned under the bed next.\n"
-            # )
-
-            test = await protocol.serial_communication.read_serial_data_as_byte_list()
-            # test = await protocol.serial_communication.read_line_as_bytes()
-            # print(test)
-            wit_test = await DataParser.witmotion_standard_protocol_angular(test)
-
-            if wit_test is not None:
-                await add_data_for_plot(wit_test)
-                print(wit_test)
-                logger.info(wit_test)
-
-    except asyncio.CancelledError:
-        print("Task was cancelled")
-
-    finally:
-        if protocol is not None:
-            protocol.serial_communication.close_port()
-        if transport is not None:
-            transport.close()
+        finally:
+            if self.protocol is not None:
+                self.protocol.serial_communication.close_port()
+            if self.transport is not None:
+                self.transport.close()
 
 
 def main():
-    async_thread = threading.Thread(target=start_asyncio_loop)
+    plotter = DataPlotter()
+
+    asyncserialmanager = AsyncSerialManager("COM4", 9600, plotter=plotter)
+    async_thread = threading.Thread(target=asyncserialmanager.start_asyncio_loop)
     async_thread.daemon = True
     async_thread.start()
 
-    plot_data()
+    plotter.show()
 
 
 if __name__ == "__main__":
