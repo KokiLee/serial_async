@@ -1,11 +1,13 @@
 import asyncio
 import configparser
 import logging
+import math
 import queue
 import threading
 from logging.handlers import RotatingFileHandler
 
 import matplotlib.pyplot as plt
+import numpy as np
 import serial_asyncio
 from matplotlib.animation import FuncAnimation
 
@@ -156,6 +158,8 @@ class DataParser:
                 logger.error(f"Fail parity check: {e}")
                 return False
 
+
+class HWT905_TTL_Dataparser:
     @staticmethod
     async def adjust_angle_async(current_angle, previous_angle):
         """
@@ -171,7 +175,7 @@ class DataParser:
         return current_angle
 
     @staticmethod
-    async def witmotion_standard_protocol_angular(data):
+    async def protocol_angular_output(data):
         previous_roll = 0
         previous_pitch = 0
         previous_yaw = 0
@@ -205,13 +209,40 @@ class DataParser:
                     yaw = combined_yaw / 32768.0 * 180
 
                     # Implemented a solution to correct overflow and underflow in sensor data processing.
-                    roll = await DataParser.adjust_angle_async(roll, previous_roll)
-                    pitch = await DataParser.adjust_angle_async(pitch, previous_pitch)
-                    yaw = await DataParser.adjust_angle_async(yaw, previous_yaw)
+                    roll = await HWT905_TTL_Dataparser.adjust_angle_async(
+                        roll, previous_roll
+                    )
+                    pitch = await HWT905_TTL_Dataparser.adjust_angle_async(
+                        pitch, previous_pitch
+                    )
+                    yaw = await HWT905_TTL_Dataparser.adjust_angle_async(
+                        yaw, previous_yaw
+                    )
 
             return roll, pitch, yaw
         except Exception as e:
-            logger.error("Data do not percer")
+            logger.error("Data doesn't match")
+
+    @staticmethod
+    async def protocol_magnetic_field_output(data):
+        for i in range(len(data) - 1):
+            if data[i] == 0x55 and data[i + 1] == 0x54:
+                hxl_hxh = bytes([data[i + 2], data[i + 3]])
+                hyl_hyh = bytes([data[i + 4], data[i + 5]])
+                hzl_hzh = bytes([data[i + 6], data[i + 7]])
+
+                combined_x = int.from_bytes(hxl_hxh, byteorder="little", signed=True)
+                combined_y = int.from_bytes(hyl_hyh, byteorder="little", signed=True)
+                combined_z = int.from_bytes(hzl_hzh, byteorder="little", signed=True)
+
+                magnetic_strength = math.sqrt(
+                    combined_x**2 + combined_y**2 + combined_z**2
+                )
+                direction = math.atan2(combined_y, combined_x) * (180 / math.pi)
+                if direction < 0:
+                    direction += 360
+
+                print(magnetic_strength, direction)
 
 
 class DataPlotter:
@@ -250,6 +281,56 @@ class DataPlotter:
             self.ax.legend()
 
     def add_data(self, data):
+        logger.info(self.data_queue.qsize())
+        self.data_queue.put(data)
+
+    def show(self):
+        plt.show()
+
+
+class DirectionPlotter:
+    def __init__(self) -> None:
+        self.data_queue = queue.Queue()
+        self.directions = []
+        self.fig, self.ax = plt.subplots(figsize=(5, 5))
+        self.quiver = None
+        self.setup_plot()
+        self.ani = FuncAnimation(
+            self.fig, self.update_plot, interval=100, save_count=300
+        )
+
+    def update_plot(self, _):
+        if not self.data_queue.empty():
+            data = self.data_queue.get_nowait()
+            if data is None:
+                return
+            rad = np.deg2rad(data)
+            self.ax.clear()
+            self.setup_plot()  # グリッドなどの設定を再適用
+            # 矢印をプロット
+            self.ax.quiver(
+                0,
+                0,
+                np.cos(rad),
+                np.sin(rad),
+                angles="xy",
+                scale_units="xy",
+                scale=1,
+                color="r",
+            )
+
+    def setup_plot(self):
+        self.ax.set_xlim(-1, 1)
+        self.ax.set_ylim(-1, 1)
+        self.ax.grid(True)
+        self.ax.set_aspect("equal", "box")
+        self.ax.axhline(y=0, color="k")
+        self.ax.axvline(x=0, color="k")
+
+    def add_data(self, data):
+        logger.info(
+            "Queue size before adding data: {}".format(self.data_queue.qsize())
+        )
         self.data_queue.put(data)
 
     def show(self):
@@ -270,6 +351,7 @@ class AsyncSerialManager:
         dsrdtr=False,
         waittime=0.1,
         plotter=None,
+        m_plotter=None,
     ) -> None:
         self.port = port
         self.baudrate = baudrate
@@ -287,6 +369,7 @@ class AsyncSerialManager:
         self.transport = None
 
         self.plotter = plotter
+        self.magnetic_plotter = m_plotter
 
     def start_asyncio_loop(self):
         self.loop = asyncio.new_event_loop()
@@ -316,7 +399,13 @@ class AsyncSerialManager:
                 # print(raw_angular_output_data)
 
                 angular_output_data = (
-                    await DataParser.witmotion_standard_protocol_angular(
+                    await HWT905_TTL_Dataparser.protocol_angular_output(
+                        raw_angular_output_data
+                    )
+                )
+
+                magnetic_field_output = (
+                    await HWT905_TTL_Dataparser.protocol_magnetic_field_output(
                         raw_angular_output_data
                     )
                 )
@@ -324,6 +413,8 @@ class AsyncSerialManager:
                 if angular_output_data is not None:
                     logger.info(angular_output_data)
                     self.plotter.add_data(angular_output_data)
+                if magnetic_field_output is not None:
+                    self.magnetic_plotter.add_data(magnetic_field_output)
 
         except asyncio.CancelledError:
             print("Task was cancelled")
@@ -337,6 +428,7 @@ class AsyncSerialManager:
 
 def main():
     plotter = DataPlotter()
+    # m_plotter = DirectionPlotter()
 
     asyncserialmanager = AsyncSerialManager("COM4", 9600, plotter=plotter)
     async_thread = threading.Thread(target=asyncserialmanager.start_asyncio_loop)
