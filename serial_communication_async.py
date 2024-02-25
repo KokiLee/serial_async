@@ -1,5 +1,6 @@
 import asyncio
 import configparser
+import cProfile
 import logging
 import math
 import queue
@@ -180,6 +181,7 @@ class HWT905_TTL_Dataparser:
         previous_roll = 0
         previous_pitch = 0
         previous_yaw = 0
+        direction = 0
         roll = None
         pitch = None
         yaw = None
@@ -218,8 +220,8 @@ class HWT905_TTL_Dataparser:
                     yaw = await HWT905_TTL_Dataparser.adjust_angle_async(
                         yaw, previous_yaw
                     )
-
             return roll, pitch, yaw
+
         except Exception as e:
             logger.error("Data doesn't match")
 
@@ -252,46 +254,46 @@ class DataPlotter:
         self.roll_data = []
         self.pitch_data = []
         self.yaw_data = []
+        self.roll_line = None
+        self.pitch_line = None
+        self.yaw_line = None
 
     def update_plot(self, _):
-        try:
-            while not self.data_queue.empty():
-                data = self.data_queue.get_nowait()
-                if data is None:
-                    continue
-                self.roll_data.append(data[0])
-                self.pitch_data.append(data[1])
-                self.yaw_data.append(data[2])
-                if len(self.roll_data) > 100:
-                    self.roll_data.pop(0)
-                    self.pitch_data.pop(0)
-                    self.yaw_data.pop(0)
-            self.fig.update()
-        except:
-            pass
+        while not self.data_queue.empty():
+            data = self.data_queue.get_nowait()
+            if data is None:
+                continue
+            self.roll_data.append(data[0])
+            self.pitch_data.append(data[1])
+            self.yaw_data.append(data[2])
+            if len(self.roll_data) > 100:
+                self.roll_data.pop(0)
+                self.pitch_data.pop(0)
+                self.yaw_data.pop(0)
 
-        self.ax.clear()
-        if self.roll_data and self.pitch_data and self.yaw_data:
-            self.ax.plot(self.roll_data, label="Roll")
-            self.ax.plot(self.pitch_data, label="Pitch")
-            self.ax.plot(self.yaw_data, label="Yaw")
-            self.ax.legend()
+        if self.roll_line is not None:
+            self.roll_line.set_data(range(len(self.roll_data)), self.roll_data)
+            self.pitch_line.set_data(range(len(self.pitch_data)), self.pitch_data)
+            self.yaw_line.set_data(range(len(self.yaw_data)), self.yaw_data)
+            self.ax.relim()
+            self.ax.autoscale_view()
 
     def add_data(self, data):
-        logger.info(self.data_queue.qsize())
         self.data_queue.put(data)
 
     def set_ax(self, ax):
         self.ax = ax
-
-    def show(self):
-        plt.show()
+        (self.roll_line,) = self.ax.plot([], [], label="Roll")
+        (self.pitch_line,) = self.ax.plot([], [], label="Pitch")
+        (self.yaw_line,) = self.ax.plot([], [], label="Yaw")
+        self.ax.legend()
 
 
 class DirectionPlotter:
     def __init__(self) -> None:
         self.data_queue = queue.Queue()
         self.directions = []
+        self.arrow = None
 
     def update_plot(self, _):
         if not self.data_queue.empty():
@@ -299,17 +301,20 @@ class DirectionPlotter:
             if data is None:
                 return
             rad = np.deg2rad(data)
-            self.ax.clear()
-            self.ax.quiver(
-                0,
-                0,
-                np.cos(rad),
-                np.sin(rad),
-                angles="xy",
-                scale_units="xy",
-                scale=1,
-                color="r",
-            )
+            # self.ax.clear()
+            if self.arrow is None:
+                self.arrow = self.ax.quiver(
+                    0,
+                    0,
+                    np.cos(rad),
+                    np.sin(rad),
+                    angles="xy",
+                    scale_units="xy",
+                    scale=1,
+                    color="r",
+                )
+            else:
+                self.arrow.set_UVC(np.cos(rad), np.sin(rad))
 
     def set_ax(self, ax):
         self.ax = ax
@@ -324,18 +329,12 @@ class DirectionPlotter:
         self.ax.axvline(x=0, color="k")
 
     def add_data(self, direction_data):
-        logger.info(
-            "Queue size before adding data: {}".format(self.data_queue.qsize())
-        )
         self.data_queue.put(direction_data)
-
-    def show(self):
-        plt.show()
 
 
 class CombinedPlotter:
     def __init__(self, angular_plotter, direction_plotter) -> None:
-        self.fig, self.axs = plt.subplots(2, 1)
+        self.fig, self.axs = plt.subplots(nrows=1, ncols=2, figsize=(9, 3))
         self.angular_plotter = angular_plotter
         self.direction_plotter = direction_plotter
 
@@ -381,7 +380,6 @@ class AsyncSerialManager:
         self.dsrdtr = dsrdtr
         self.waittime = waittime
 
-        # self.loop = asyncio.get_event_loop()
         self.protocol = None
         self.transport = None
 
@@ -449,6 +447,10 @@ def main():  # 2つのサブプロットを作成
     direction_plotter = DirectionPlotter()
     angular_plotter = DataPlotter()
     combined_plotter = CombinedPlotter(angular_plotter, direction_plotter)
+    combined_plotter.fig.suptitle("Angle and Magnetic field")
+    combined_plotter.fig.canvas.manager.set_window_title(
+        "Witmotion: HWT905-TTL MPU-9250"
+    )
 
     asyncserialmanager = AsyncSerialManager(
         "COM4",
@@ -460,7 +462,6 @@ def main():  # 2つのサブプロットを作成
     async_thread.daemon = True
     async_thread.start()
 
-    # direction_plotter.show()
     combined_plotter.show()
 
 
