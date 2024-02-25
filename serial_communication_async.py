@@ -443,7 +443,7 @@ class AsyncSerialManager:
                 self.transport.close()
 
 
-def main():  # 2つのサブプロットを作成
+def main():
     direction_plotter = DirectionPlotter()
     angular_plotter = DataPlotter()
     combined_plotter = CombinedPlotter(angular_plotter, direction_plotter)
