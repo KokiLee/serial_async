@@ -8,6 +8,7 @@ from logging.handlers import RotatingFileHandler
 
 import matplotlib.pyplot as plt
 import numpy as np
+import serial
 import serial_asyncio
 from matplotlib.animation import FuncAnimation
 
@@ -185,7 +186,6 @@ class HWT905_TTL_Dataparser:
         try:
             for i in range(len(data) - 1):
                 if data[i] == 0x55 and data[i + 1] == 0x53:
-                    # if data[i] == 85 and data[i + 1] == 83:
                     # Byte value: An integer representing a single byte. Example: 85 or 0x55
                     # Byte string: A sequence containing one or more byte values. Example: b"\x55"
 
@@ -225,6 +225,7 @@ class HWT905_TTL_Dataparser:
 
     @staticmethod
     async def protocol_magnetic_field_output(data):
+        direction = 0
         for i in range(len(data) - 1):
             if data[i] == 0x55 and data[i + 1] == 0x54:
                 hxl_hxh = bytes([data[i + 2], data[i + 3]])
@@ -242,7 +243,7 @@ class HWT905_TTL_Dataparser:
                 if direction < 0:
                     direction += 360
 
-                print(magnetic_strength, direction)
+        return direction
 
 
 class DataPlotter:
@@ -251,10 +252,6 @@ class DataPlotter:
         self.roll_data = []
         self.pitch_data = []
         self.yaw_data = []
-        self.fig, self.ax = plt.subplots()
-        self.ani = FuncAnimation(
-            self.fig, self.update_plot, interval=100, save_count=150
-        )
 
     def update_plot(self, _):
         try:
@@ -284,6 +281,9 @@ class DataPlotter:
         logger.info(self.data_queue.qsize())
         self.data_queue.put(data)
 
+    def set_ax(self, ax):
+        self.ax = ax
+
     def show(self):
         plt.show()
 
@@ -292,12 +292,6 @@ class DirectionPlotter:
     def __init__(self) -> None:
         self.data_queue = queue.Queue()
         self.directions = []
-        self.fig, self.ax = plt.subplots(figsize=(5, 5))
-        self.quiver = None
-        self.setup_plot()
-        self.ani = FuncAnimation(
-            self.fig, self.update_plot, interval=100, save_count=300
-        )
 
     def update_plot(self, _):
         if not self.data_queue.empty():
@@ -306,8 +300,6 @@ class DirectionPlotter:
                 return
             rad = np.deg2rad(data)
             self.ax.clear()
-            self.setup_plot()  # グリッドなどの設定を再適用
-            # 矢印をプロット
             self.ax.quiver(
                 0,
                 0,
@@ -319,6 +311,10 @@ class DirectionPlotter:
                 color="r",
             )
 
+    def set_ax(self, ax):
+        self.ax = ax
+        self.setup_plot()
+
     def setup_plot(self):
         self.ax.set_xlim(-1, 1)
         self.ax.set_ylim(-1, 1)
@@ -327,11 +323,32 @@ class DirectionPlotter:
         self.ax.axhline(y=0, color="k")
         self.ax.axvline(x=0, color="k")
 
-    def add_data(self, data):
+    def add_data(self, direction_data):
         logger.info(
             "Queue size before adding data: {}".format(self.data_queue.qsize())
         )
-        self.data_queue.put(data)
+        self.data_queue.put(direction_data)
+
+    def show(self):
+        plt.show()
+
+
+class CombinedPlotter:
+    def __init__(self, angular_plotter, direction_plotter) -> None:
+        self.fig, self.axs = plt.subplots(2, 1)
+        self.angular_plotter = angular_plotter
+        self.direction_plotter = direction_plotter
+
+        self.angular_plotter.set_ax(self.axs[0])
+        self.direction_plotter.set_ax(self.axs[1])
+
+        self.ani = FuncAnimation(
+            self.fig, self.update_plots, interval=100, save_count=300
+        )
+
+    def update_plots(self, _):
+        self.angular_plotter.update_plot(_)
+        self.direction_plotter.update_plot(_)
 
     def show(self):
         plt.show()
@@ -350,8 +367,8 @@ class AsyncSerialManager:
         rtscts=False,
         dsrdtr=False,
         waittime=0.1,
-        plotter=None,
-        m_plotter=None,
+        angular_plotter=None,
+        direction_plotter=None,
     ) -> None:
         self.port = port
         self.baudrate = baudrate
@@ -368,8 +385,8 @@ class AsyncSerialManager:
         self.protocol = None
         self.transport = None
 
-        self.plotter = plotter
-        self.magnetic_plotter = m_plotter
+        self.angular_plotter = angular_plotter
+        self.direction_plotter = direction_plotter
 
     def start_asyncio_loop(self):
         self.loop = asyncio.new_event_loop()
@@ -396,8 +413,6 @@ class AsyncSerialManager:
                     await self.protocol.serial_communication.read_serial_data_as_byte_list()
                 )
 
-                # print(raw_angular_output_data)
-
                 angular_output_data = (
                     await HWT905_TTL_Dataparser.protocol_angular_output(
                         raw_angular_output_data
@@ -412,12 +427,16 @@ class AsyncSerialManager:
 
                 if angular_output_data is not None:
                     logger.info(angular_output_data)
-                    self.plotter.add_data(angular_output_data)
+                    self.angular_plotter.add_data(angular_output_data)
                 if magnetic_field_output is not None:
-                    self.magnetic_plotter.add_data(magnetic_field_output)
+                    logger.info(magnetic_field_output)
+                    self.direction_plotter.add_data(magnetic_field_output)
 
         except asyncio.CancelledError:
             print("Task was cancelled")
+
+        except serial.SerialException as e:
+            logger.error(f"Serial port {self.port} not opend: {e}")
 
         finally:
             if self.protocol is not None:
@@ -426,16 +445,23 @@ class AsyncSerialManager:
                 self.transport.close()
 
 
-def main():
-    plotter = DataPlotter()
-    # m_plotter = DirectionPlotter()
+def main():  # 2つのサブプロットを作成
+    direction_plotter = DirectionPlotter()
+    angular_plotter = DataPlotter()
+    combined_plotter = CombinedPlotter(angular_plotter, direction_plotter)
 
-    asyncserialmanager = AsyncSerialManager("COM4", 9600, plotter=plotter)
+    asyncserialmanager = AsyncSerialManager(
+        "COM4",
+        9600,
+        direction_plotter=direction_plotter,
+        angular_plotter=angular_plotter,
+    )
     async_thread = threading.Thread(target=asyncserialmanager.start_asyncio_loop)
     async_thread.daemon = True
     async_thread.start()
 
-    plotter.show()
+    # direction_plotter.show()
+    combined_plotter.show()
 
 
 if __name__ == "__main__":
