@@ -181,7 +181,6 @@ class HWT905_TTL_Dataparser:
         previous_roll = 0
         previous_pitch = 0
         previous_yaw = 0
-        direction = 0
         roll = None
         pitch = None
         yaw = None
@@ -228,6 +227,7 @@ class HWT905_TTL_Dataparser:
     @staticmethod
     async def protocol_magnetic_field_output(data):
         direction = 0
+        magnetic_strength = 0
         for i in range(len(data) - 1):
             if data[i] == 0x55 and data[i + 1] == 0x54:
                 hxl_hxh = bytes([data[i + 2], data[i + 3]])
@@ -245,7 +245,7 @@ class HWT905_TTL_Dataparser:
                 if direction < 0:
                     direction += 360
 
-        return direction
+        return direction, magnetic_strength
 
 
 class DataPlotter:
@@ -300,8 +300,8 @@ class DirectionPlotter:
             data = self.data_queue.get_nowait()
             if data is None:
                 return
-            rad = np.deg2rad(data)
-            # self.ax.clear()
+            rad = np.deg2rad(data[0])
+            magnetic_strength = data[1]
             if self.arrow is None:
                 self.arrow = self.ax.quiver(
                     0,
@@ -315,6 +315,22 @@ class DirectionPlotter:
                 )
             else:
                 self.arrow.set_UVC(np.cos(rad), np.sin(rad))
+
+            if hasattr(self, "magnetic_strength_text"):
+                self.magnetic_strength_text.set_text(
+                    f"Magnetic Strength: {magnetic_strength:.2f}"
+                )
+            else:
+                self.magnetic_strength_text = self.ax.text(
+                    0.95,
+                    0.95,
+                    f"Magnetic Strength: {magnetic_strength:.2f}",
+                    verticalalignment="top",
+                    horizontalalignment="right",
+                    transform=self.ax.transAxes,
+                    color="blue",
+                    fontsize=10,
+                )
 
     def set_ax(self, ax):
         self.ax = ax
