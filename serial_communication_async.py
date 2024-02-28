@@ -30,7 +30,7 @@ class AsyncSerialCommunicator(asyncio.Protocol):
     # "Request to send" to disable.
     def connection_made(self, transport):
         self.transport = transport
-        print("port opened", transport)
+        logger.info(f"Port Opend: {transport}")
         transport.serial.rts = False
         self.serial_communication = SerialCommunication(transport)
 
@@ -69,7 +69,6 @@ class AsyncSerialCommunicator(asyncio.Protocol):
 class SerialCommunication:
     def __init__(self, transport) -> None:
         self.transport = transport
-        logger.info("port opend", transport)
 
     async def send_string_as_byte(self, writestr: str):
         loop = asyncio.get_running_loop()
@@ -402,19 +401,30 @@ class AsyncSerialManager:
         self.angular_plotter = angular_plotter
         self.direction_plotter = direction_plotter
 
-    def start_asyncio_loop(self):
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-        self.loop.run_until_complete(
-            asyncio.gather(self.read_angular_data(), self.read_magnetic_data())
-        )
-        self.loop.close()
-
-    async def read_angular_data(self):
-        if self.angular_plotter is None:
+    async def run_async_data_processing(self):
+        if not await self.open_serial_connection():
             return False
 
-        loop = asyncio.get_running_loop()
+        def run():
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(
+                    asyncio.gather(
+                        self.read_angular_data(),
+                        self.read_magnetic_data(),
+                    )
+                )
+            finally:
+                loop.close()
+
+        thread = threading.Thread(target=run)
+        thread.daemon = True
+        thread.start()
+
+    async def open_serial_connection(self):
+        loop = asyncio.get_event_loop()
         try:
             self.transport, self.protocol = (
                 await serial_asyncio.create_serial_connection(
@@ -424,20 +434,26 @@ class AsyncSerialManager:
                     baudrate=self.baudrate,
                 )
             )
+            return True
+        except serial.SerialException as e:
+            logger.error(f"Failed to open serial port {self.port}: {e}")
+            return False
 
+    async def read_angular_data(self):
+        if self.angular_plotter is None:
+            return False
+
+        try:
             while True:
                 await asyncio.sleep(self.waittime)
-
                 raw_angular_output_data = (
                     await self.protocol.serial_communication.read_serial_data_as_byte_list()
                 )
-
                 angular_output_data = (
                     await HWT905_TTL_Dataparser.protocol_angular_output(
                         raw_angular_output_data
                     )
                 )
-
                 if angular_output_data is not None:
                     logger.info(angular_output_data)
                     self.angular_plotter.add_data(angular_output_data)
@@ -449,40 +465,24 @@ class AsyncSerialManager:
             logger.error(f"Serial port {self.port} not opend: {e}")
 
         finally:
-            if self.protocol is not None:
-                self.protocol.serial_communication.close_port()
-                logger.info("Closed port for protocol")
-            if self.transport is not None:
-                self.transport.close()
-                logger.info("Close port for transport")
+            self.close_connection()
 
     async def read_magnetic_data(self):
         if self.direction_plotter is None:
             return False
-        loop = asyncio.get_running_loop()
-        try:
-            self.transport, self.protocol = (
-                await serial_asyncio.create_serial_connection(
-                    loop,
-                    AsyncSerialCommunicator,
-                    self.port,
-                    baudrate=self.baudrate,
-                )
-            )
 
+        try:
             while True:
                 await asyncio.sleep(self.waittime)
 
                 raw_angular_output_data = (
                     await self.protocol.serial_communication.read_serial_data_as_byte_list()
                 )
-
                 magnetic_field_output = (
                     await HWT905_TTL_Dataparser.protocol_magnetic_field_output(
                         raw_angular_output_data
                     )
                 )
-
                 if magnetic_field_output is not None:
                     logger.info(magnetic_field_output)
                     self.direction_plotter.add_data(magnetic_field_output)
@@ -494,12 +494,15 @@ class AsyncSerialManager:
             logger.error(f"Serial port {self.port} not opend: {e}")
 
         finally:
-            if self.protocol is not None:
-                self.protocol.serial_communication.close_port()
-                logger.info("Closed port for protocol")
-            if self.transport is not None:
-                self.transport.close()
-                logger.info("Close port for transport")
+            self.close_connection()
+
+    def close_connection(self):
+        if self.protocol is not None:
+            self.protocol.serial_communication.close_port()
+            logger.info("Closed port for protocol")
+        if self.transport is not None:
+            self.transport.close()
+            logger.info("Close port for transport")
 
 
 def main():
@@ -516,10 +519,10 @@ def main():
         9600,
         direction_plotter=direction_plotter,
         angular_plotter=angular_plotter,
+        waittime=0.1,
     )
-    async_thread = threading.Thread(target=asyncserialmanager.start_asyncio_loop)
-    async_thread.daemon = True
-    async_thread.start()
+    asyncio.run(asyncserialmanager.run_async_data_processing())
+    # print(asyncserialmanager.read_magnetic_data())
 
     combined_plotter.show()
 
