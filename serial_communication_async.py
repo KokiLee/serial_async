@@ -401,19 +401,15 @@ class AsyncSerialManager:
         self.angular_plotter = angular_plotter
         self.direction_plotter = direction_plotter
 
-    async def run_async_data_processing(self):
-        if not await self.open_serial_connection():
-            return False
-
+    def run_async_data_processing(self):
         def run():
-
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
                 loop.run_until_complete(
                     asyncio.gather(
-                        self.read_angular_data(),
-                        self.read_magnetic_data(),
+                        self.open_serial_connection(),
+                        self.read_sensor_data(),
                     )
                 )
             finally:
@@ -439,7 +435,7 @@ class AsyncSerialManager:
             logger.error(f"Failed to open serial port {self.port}: {e}")
             return False
 
-    async def read_angular_data(self):
+    async def read_sensor_data(self):
         if self.angular_plotter is None:
             return False
 
@@ -454,35 +450,17 @@ class AsyncSerialManager:
                         raw_angular_output_data
                     )
                 )
-                if angular_output_data is not None:
-                    logger.info(angular_output_data)
-                    self.angular_plotter.add_data(angular_output_data)
 
-        except asyncio.CancelledError:
-            logger.info("Task was cancelled")
-
-        except serial.SerialException as e:
-            logger.error(f"Serial port {self.port} not opend: {e}")
-
-        finally:
-            self.close_connection()
-
-    async def read_magnetic_data(self):
-        if self.direction_plotter is None:
-            return False
-
-        try:
-            while True:
-                await asyncio.sleep(self.waittime)
-
-                raw_angular_output_data = (
-                    await self.protocol.serial_communication.read_serial_data_as_byte_list()
-                )
                 magnetic_field_output = (
                     await HWT905_TTL_Dataparser.protocol_magnetic_field_output(
                         raw_angular_output_data
                     )
                 )
+
+                if angular_output_data is not None:
+                    logger.info(angular_output_data)
+                    self.angular_plotter.add_data(angular_output_data)
+
                 if magnetic_field_output is not None:
                     logger.info(magnetic_field_output)
                     self.direction_plotter.add_data(magnetic_field_output)
@@ -521,8 +499,8 @@ def main():
         angular_plotter=angular_plotter,
         waittime=0.1,
     )
-    asyncio.run(asyncserialmanager.run_async_data_processing())
-    # print(asyncserialmanager.read_magnetic_data())
+    # asyncserialmanager.open_serial_connection()
+    asyncserialmanager.run_async_data_processing()
 
     combined_plotter.show()
 

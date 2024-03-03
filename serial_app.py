@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import tkinter as tk
 
@@ -27,9 +28,8 @@ def main():
         direction_plotter=direction_plotter,
         angular_plotter=angular_plotter,
     )
-    async_thread = threading.Thread(target=asyncserialmanager.start_asyncio_loop)
-    async_thread.daemon = True
-    async_thread.start()
+
+    asyncio.run(asyncserialmanager.run_async_data_processing())
 
     root.mainloop()
 
