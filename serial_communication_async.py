@@ -47,14 +47,14 @@ class AsyncSerialCommunicator(asyncio.Protocol):
 
     # if writing buffer is upper limmit,called by asyncio.
     def pause_writing(self):
-        print("pause writing")
-        print(self.transport.get_write_buffer_size())
+        logger.info("pause writing")
+        logger.info(self.transport.get_write_buffer_size())
 
     # Called by asyncio when writing buffer is the acceptable range.
     # This method is used to resume writing.
     def resume_writing(self):
-        print(self.transport.get_write_buffer_size())
-        print("resume writing")
+        logger.info(self.transport.get_write_buffer_size())
+        logger.info("resume writing")
 
     # This method is used to pause data reading.
     # If data processing data takes a long time, or buffer overflow prevents reading, reading may be paused.
@@ -162,7 +162,7 @@ class DataParser:
 
 class HWT905_TTL_Dataparser:
     @staticmethod
-    async def adjust_angle_async(current_angle, previous_angle):
+    def adjust_angle_async(current_angle, previous_angle):
         """
         Corrected overflow and underflow when angular difference exceeding 180 degree
         :return: corrected angle
@@ -176,7 +176,7 @@ class HWT905_TTL_Dataparser:
         return current_angle
 
     @staticmethod
-    async def protocol_angular_output(data):
+    def protocol_angular_output(data):
         previous_roll = 0
         previous_pitch = 0
         previous_yaw = 0
@@ -209,22 +209,20 @@ class HWT905_TTL_Dataparser:
                     yaw = combined_yaw / 32768.0 * 180
 
                     # Implemented a solution to correct overflow and underflow in sensor data processing.
-                    roll = await HWT905_TTL_Dataparser.adjust_angle_async(
+                    roll = HWT905_TTL_Dataparser.adjust_angle_async(
                         roll, previous_roll
                     )
-                    pitch = await HWT905_TTL_Dataparser.adjust_angle_async(
+                    pitch = HWT905_TTL_Dataparser.adjust_angle_async(
                         pitch, previous_pitch
                     )
-                    yaw = await HWT905_TTL_Dataparser.adjust_angle_async(
-                        yaw, previous_yaw
-                    )
+                    yaw = HWT905_TTL_Dataparser.adjust_angle_async(yaw, previous_yaw)
             return roll, pitch, yaw
 
         except Exception as e:
             logger.error("Data doesn't match")
 
     @staticmethod
-    async def protocol_magnetic_field_output(data):
+    def protocol_magnetic_field_output(data):
         direction = 0
         magnetic_strength = 0
         for i in range(len(data) - 1):
@@ -247,9 +245,8 @@ class HWT905_TTL_Dataparser:
         return direction, magnetic_strength
 
 
-class DataPlotter:
+class AngularPlotter:
     def __init__(self) -> None:
-        self.data_queue = queue.Queue()
         self.roll_data = []
         self.pitch_data = []
         self.yaw_data = []
@@ -258,19 +255,20 @@ class DataPlotter:
         self.yaw_line = None
 
     def update_plot(self, _):
-        while not self.data_queue.empty():
-            data = self.data_queue.get_nowait()
-            if data is None:
-                continue
-            self.roll_data.append(data[0])
-            self.pitch_data.append(data[1])
-            self.yaw_data.append(data[2])
-            if len(self.roll_data) > 100:
-                self.roll_data.pop(0)
-                self.pitch_data.pop(0)
-                self.yaw_data.pop(0)
+        if self.roll_data and self.roll_data[-1] is not None:
+            self.roll_text.set_text(f"Roll: {self.roll_data[-1]:.2f}")
 
-        if self.roll_line is not None:
+        if self.pitch_data and self.pitch_data[-1] is not None:
+            self.pitch_text.set_text(f"Pitch: {self.pitch_data[-1]:.2f}")
+
+        if self.yaw_data and self.yaw_data[-1] is not None:
+            self.yaw_text.set_text(f"Yaw: {self.yaw_data[-1]:.2f}")
+
+        if (
+            self.roll_line is not None
+            and self.pitch_line is not None
+            and self.yaw_line is not None
+        ):
             self.roll_line.set_data(range(len(self.roll_data)), self.roll_data)
             self.pitch_line.set_data(range(len(self.pitch_data)), self.pitch_data)
             self.yaw_line.set_data(range(len(self.yaw_data)), self.yaw_data)
@@ -278,58 +276,84 @@ class DataPlotter:
             self.ax.autoscale_view()
 
     def add_data(self, data):
-        self.data_queue.put(data)
+        self.roll_data.append(data[0])
+        self.pitch_data.append(data[1])
+        self.yaw_data.append(data[2])
+
+        if len(self.roll_data) > 100:
+            self.roll_data.pop(0)
+            self.pitch_data.pop(0)
+            self.yaw_data.pop(0)
 
     def set_ax(self, ax):
         self.ax = ax
         (self.roll_line,) = self.ax.plot([], [], label="Roll")
         (self.pitch_line,) = self.ax.plot([], [], label="Pitch")
         (self.yaw_line,) = self.ax.plot([], [], label="Yaw")
+
+        self.roll_text = self.ax.text(
+            0.0,
+            1.06,
+            "Roll: N/A",
+            transform=self.ax.transAxes,
+            verticalalignment="top",
+            color="blue",
+        )
+        self.pitch_text = self.ax.text(
+            0.3,
+            1.06,
+            "Pitch: N/A",
+            transform=self.ax.transAxes,
+            verticalalignment="top",
+            color="orange",
+        )
+        self.yaw_text = self.ax.text(
+            0.6,
+            1.06,
+            "Yaw: N/A",
+            transform=self.ax.transAxes,
+            verticalalignment="top",
+            color="green",
+        )
         self.ax.legend()
 
 
 class DirectionPlotter:
     def __init__(self) -> None:
-        self.data_queue = queue.Queue()
-        self.directions = []
+        self.rad = 0
+        self.magnetic_strength = 0
         self.arrow = None
 
     def update_plot(self, _):
-        if not self.data_queue.empty():
-            data = self.data_queue.get_nowait()
-            if data is None:
-                return
-            rad = np.deg2rad(data[0])
-            magnetic_strength = data[1]
-            if self.arrow is None:
-                self.arrow = self.ax.quiver(
-                    0,
-                    0,
-                    np.cos(rad),
-                    np.sin(rad),
-                    angles="xy",
-                    scale_units="xy",
-                    scale=1,
-                    color="r",
-                )
-            else:
-                self.arrow.set_UVC(np.cos(rad), np.sin(rad))
+        if self.arrow is None:
+            self.arrow = self.ax.quiver(
+                0,
+                0,
+                np.cos(self.rad),
+                np.sin(self.rad),
+                angles="xy",
+                scale_units="xy",
+                scale=1,
+                color="r",
+            )
+        else:
+            self.arrow.set_UVC(np.cos(self.rad), np.sin(self.rad))
 
-            if hasattr(self, "magnetic_strength_text"):
-                self.magnetic_strength_text.set_text(
-                    f"Magnetic Strength: {magnetic_strength:.2f}"
-                )
-            else:
-                self.magnetic_strength_text = self.ax.text(
-                    0.95,
-                    0.95,
-                    f"Magnetic Strength: {magnetic_strength:.2f}",
-                    verticalalignment="top",
-                    horizontalalignment="right",
-                    transform=self.ax.transAxes,
-                    color="blue",
-                    fontsize=10,
-                )
+        if hasattr(self, "magnetic_strength_text"):
+            self.magnetic_strength_text.set_text(
+                f"Magnetic Strength: {self.magnetic_strength:.2f}"
+            )
+        else:
+            self.magnetic_strength_text = self.ax.text(
+                0.95,
+                1.06,
+                f"Magnetic Strength: {self.magnetic_strength:.2f}",
+                verticalalignment="top",
+                horizontalalignment="right",
+                transform=self.ax.transAxes,
+                color="blue",
+                fontsize=10,
+            )
 
     def set_ax(self, ax):
         self.ax = ax
@@ -344,14 +368,16 @@ class DirectionPlotter:
         self.ax.axvline(x=0, color="k")
 
     def add_data(self, direction_data):
-        self.data_queue.put(direction_data)
+        self.rad = np.deg2rad(direction_data[0])
+        self.magnetic_strength = direction_data[1]
 
 
 class CombinedPlotter:
-    def __init__(self, angular_plotter, direction_plotter) -> None:
-        self.fig, self.axs = plt.subplots(nrows=1, ncols=2, figsize=(9, 3))
+    def __init__(self, angular_plotter, direction_plotter, data_processor) -> None:
+        self.fig, self.axs = plt.subplots(nrows=1, ncols=2, figsize=(9, 4))
         self.angular_plotter = angular_plotter
         self.direction_plotter = direction_plotter
+        self.data_processor = data_processor
 
         self.angular_plotter.set_ax(self.axs[0])
         self.direction_plotter.set_ax(self.axs[1])
@@ -361,8 +387,14 @@ class CombinedPlotter:
         )
 
     def update_plots(self, _):
-        self.angular_plotter.update_plot(_)
-        self.direction_plotter.update_plot(_)
+        angular_output_data, magnetic_field_output = (
+            self.data_processor.read_sensor_data()
+        )
+        if angular_output_data and magnetic_field_output:
+            self.angular_plotter.add_data(angular_output_data)
+            self.direction_plotter.add_data(magnetic_field_output)
+            self.angular_plotter.update_plot(_)
+            self.direction_plotter.update_plot(_)
 
     def show(self):
         plt.show()
@@ -381,8 +413,6 @@ class AsyncSerialManager:
         rtscts=False,
         dsrdtr=False,
         waittime=0.1,
-        angular_plotter=None,
-        direction_plotter=None,
     ) -> None:
         self.port = port
         self.baudrate = baudrate
@@ -398,20 +428,22 @@ class AsyncSerialManager:
         self.protocol = None
         self.transport = None
 
-        self.angular_plotter = angular_plotter
-        self.direction_plotter = direction_plotter
+    def run_async_data_processing(self, result_queue):
+        async def run_async_tasks():
+            open_connection_success = await self.open_serial_connection()
+            if not open_connection_success:
+                logger.error("Failed to open serial connection")
+                return
+            while True:
+                data = await self.read_data()
 
-    def run_async_data_processing(self):
+                result_queue.put(data)
+
         def run():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                loop.run_until_complete(
-                    asyncio.gather(
-                        self.open_serial_connection(),
-                        self.read_sensor_data(),
-                    )
-                )
+                loop.run_until_complete(run_async_tasks())
             finally:
                 loop.close()
 
@@ -428,6 +460,13 @@ class AsyncSerialManager:
                     AsyncSerialCommunicator,
                     self.port,
                     baudrate=self.baudrate,
+                    bytesize=self.bytesize,
+                    parity=self.parity,
+                    stopbits=self.stopbits,
+                    timeout=self.timeout,
+                    xonxoff=self.xonxoff,
+                    rtscts=self.rtscts,
+                    dsrdtr=self.dsrdtr,
                 )
             )
             return True
@@ -435,46 +474,19 @@ class AsyncSerialManager:
             logger.error(f"Failed to open serial port {self.port}: {e}")
             return False
 
-    async def read_sensor_data(self):
-        if self.angular_plotter is None:
-            return False
-
+    async def read_data(self):
+        await asyncio.sleep(self.waittime)
+        raw_angular_output_data = None
         try:
-            while True:
-                await asyncio.sleep(self.waittime)
-                raw_angular_output_data = (
-                    await self.protocol.serial_communication.read_serial_data_as_byte_list()
-                )
-                angular_output_data = (
-                    await HWT905_TTL_Dataparser.protocol_angular_output(
-                        raw_angular_output_data
-                    )
-                )
+            raw_angular_output_data = (
+                await self.protocol.serial_communication.read_serial_data_as_byte_list()
+            )
+        except Exception as e:
+            logger.error(f"Data none {e}")
 
-                magnetic_field_output = (
-                    await HWT905_TTL_Dataparser.protocol_magnetic_field_output(
-                        raw_angular_output_data
-                    )
-                )
+        return raw_angular_output_data
 
-                if angular_output_data is not None:
-                    logger.info(angular_output_data)
-                    self.angular_plotter.add_data(angular_output_data)
-
-                if magnetic_field_output is not None:
-                    logger.info(magnetic_field_output)
-                    self.direction_plotter.add_data(magnetic_field_output)
-
-        except asyncio.CancelledError:
-            logger.info("Task was cancelled")
-
-        except serial.SerialException as e:
-            logger.error(f"Serial port {self.port} not opend: {e}")
-
-        finally:
-            self.close_connection()
-
-    def close_connection(self):
+    async def close_connection(self):
         if self.protocol is not None:
             self.protocol.serial_communication.close_port()
             logger.info("Closed port for protocol")
@@ -483,24 +495,56 @@ class AsyncSerialManager:
             logger.info("Close port for transport")
 
 
+class DataProcessor:
+    def __init__(self, read_data_queue) -> None:
+        self.read_data_queue = read_data_queue
+
+    def read_sensor_data(self):
+        if not self.read_data_queue.empty():
+            sensor_data = self.read_data_queue.get()
+
+            angular_output_data = HWT905_TTL_Dataparser.protocol_angular_output(
+                sensor_data
+            )
+
+            magnetic_field_output = (
+                HWT905_TTL_Dataparser.protocol_magnetic_field_output(sensor_data)
+            )
+
+            logger.info(
+                f"angle: {angular_output_data}, magnetic field: {magnetic_field_output}"
+            )
+
+            return angular_output_data, magnetic_field_output
+        else:
+            return None, None
+
+
 def main():
     direction_plotter = DirectionPlotter()
-    angular_plotter = DataPlotter()
-    combined_plotter = CombinedPlotter(angular_plotter, direction_plotter)
-    combined_plotter.fig.suptitle("Angle and Magnetic field")
-    combined_plotter.fig.canvas.manager.set_window_title(
-        "Witmotion: HWT905-TTL MPU-9250"
-    )
+    angular_plotter = AngularPlotter()
+
+    result_queue = queue.Queue()
 
     asyncserialmanager = AsyncSerialManager(
         "COM4",
         9600,
-        direction_plotter=direction_plotter,
-        angular_plotter=angular_plotter,
         waittime=0.1,
     )
-    # asyncserialmanager.open_serial_connection()
-    asyncserialmanager.run_async_data_processing()
+
+    asyncserialmanager.run_async_data_processing(result_queue=result_queue)
+
+    dataprocessor = DataProcessor(result_queue)
+
+    combined_plotter = CombinedPlotter(
+        angular_plotter, direction_plotter, dataprocessor
+    )
+
+    combined_plotter.fig.suptitle("Angle and Magnetic field", y=0.98)
+
+    combined_plotter.fig.canvas.manager.set_window_title(
+        "Witmotion: HWT905-TTL MPU-9250"
+    )
 
     combined_plotter.show()
 
