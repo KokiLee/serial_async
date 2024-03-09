@@ -28,7 +28,7 @@ def main():
     combined_plotter = serial_communication_async.CombinedPlotter(
         angular_plotter, direction_plotter, dataprocessor
     )
-    combined_plotter.fig.suptitle("Angle and Magnetic field", y=0.98)
+    combined_plotter.fig.suptitle("Angle and Magnetic field")
 
     canvas = FigureCanvasTkAgg(combined_plotter.fig, master=root)
     canvas_weight = canvas.get_tk_widget()

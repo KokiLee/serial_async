@@ -37,7 +37,7 @@ class AsyncSerialCommunicator(asyncio.Protocol):
     # data-received-class is for data receive. data-received-class called by asyncio.
     # This method displays receive data. data reading paused.
     def data_received(self, data):
-        print("data received", repr(data))
+        logger.info(f"data received: {repr(data)}")
         self.pause_reading()
 
     # called by asyncio when connection lost. "exc" parameter is an exception object.
@@ -162,7 +162,7 @@ class DataParser:
 
 class HWT905_TTL_Dataparser:
     @staticmethod
-    def adjust_angle_async(current_angle, previous_angle):
+    def adjust_angular_async(current_angle, previous_angle):
         """
         Corrected overflow and underflow when angular difference exceeding 180 degree
         :return: corrected angle
@@ -209,13 +209,19 @@ class HWT905_TTL_Dataparser:
                     yaw = combined_yaw / 32768.0 * 180
 
                     # Implemented a solution to correct overflow and underflow in sensor data processing.
-                    roll = HWT905_TTL_Dataparser.adjust_angle_async(
+                    roll = HWT905_TTL_Dataparser.adjust_angular_async(
                         roll, previous_roll
                     )
-                    pitch = HWT905_TTL_Dataparser.adjust_angle_async(
+                    previous_roll = roll
+
+                    pitch = HWT905_TTL_Dataparser.adjust_angular_async(
                         pitch, previous_pitch
                     )
-                    yaw = HWT905_TTL_Dataparser.adjust_angle_async(yaw, previous_yaw)
+                    previous_pitch = pitch
+
+                    yaw = HWT905_TTL_Dataparser.adjust_angular_async(yaw, previous_yaw)
+                    previous_yaw = yaw
+
             return roll, pitch, yaw
 
         except Exception as e:
@@ -397,6 +403,7 @@ class CombinedPlotter:
             self.direction_plotter.update_plot(_)
 
     def show(self):
+        plt.tight_layout()
         plt.show()
 
 
@@ -511,10 +518,6 @@ class DataProcessor:
                 HWT905_TTL_Dataparser.protocol_magnetic_field_output(sensor_data)
             )
 
-            logger.info(
-                f"angle: {angular_output_data}, magnetic field: {magnetic_field_output}"
-            )
-
             return angular_output_data, magnetic_field_output
         else:
             return None, None
@@ -540,7 +543,7 @@ def main():
         angular_plotter, direction_plotter, dataprocessor
     )
 
-    combined_plotter.fig.suptitle("Angle and Magnetic field", y=0.98)
+    combined_plotter.fig.suptitle("Angle and Magnetic field")
 
     combined_plotter.fig.canvas.manager.set_window_title(
         "Witmotion: HWT905-TTL MPU-9250"
