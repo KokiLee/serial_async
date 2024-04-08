@@ -23,14 +23,15 @@ logger.setLevel(logging.DEBUG)
 logger.addHandler(handler)
 
 
-# Ser class modify
+# 非同期IOを使用してシリアル通信を行うためのクラス。
+# asyncio.Protocolを継承しており、非同期IOのコールバックメソッドをオーバーライドしている、
 class AsyncSerialCommunicator(asyncio.Protocol):
     # called by asyncio when establishment a connection.
     # Save transport object to instance variable and Make instance of SrialCommunication class.
     # "Request to send" to disable.
     def connection_made(self, transport):
         self.transport = transport
-        logger.info(f"Port Opend: {transport}")
+        logger.info(f"Port Opened: {transport}")
         transport.serial.rts = False
         self.serial_communication = SerialCommunication(transport)
 
@@ -66,6 +67,8 @@ class AsyncSerialCommunicator(asyncio.Protocol):
         self.transport.resume_reading()
 
 
+# シリアルポートを介してデータの送受信を行うためのクラス。
+# 送信するデータをバイト列に変換し、受信したデータをバイト列のリストとして処理。
 class SerialCommunication:
     def __init__(self, transport) -> None:
         self.transport = transport
@@ -74,7 +77,7 @@ class SerialCommunication:
         loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(None, self.transport.write, writestr.encode())
-            logger.info("Send", self.transport)
+            logger.info(f"Send: {self.transport}")
             return True
         except Exception as e:
             logger.error(f"Failed to send data: {e}")
@@ -109,6 +112,8 @@ class SerialCommunication:
             logger.info("Serial port closed")
 
 
+# 受信したバイト列データを解析し、ASCII文字列に変換したり、BCCチェックを行う。
+# 固有のものは別ファイルにして、一般的なものをここに記述する。
 class DataParser:
     @staticmethod
     async def byte_to_ascii(
@@ -160,6 +165,8 @@ class DataParser:
                 return False
 
 
+# HWT905 TTL センサーのデータ解析専用。角度、磁場データを解析して適切な形式で出力する。
+# 別ファイルにわける。
 class HWT905_TTL_Dataparser:
     @staticmethod
     def adjust_angular_async(current_angle, previous_angle):
@@ -251,6 +258,8 @@ class HWT905_TTL_Dataparser:
         return direction, magnetic_strength
 
 
+# 角度データをグラフにプロットするクラス。
+# HWT905 TTL専用。ロー、ピッチ、ヨーのデータをグラフにリアルタイムでプロットする。
 class AngularPlotter:
     def __init__(self) -> None:
         self.roll_data = []
@@ -324,6 +333,8 @@ class AngularPlotter:
         self.ax.legend()
 
 
+# 磁場の方向と強さをグラフにプロットする。
+# matplotlibのquiver関数を使用して、磁場の方向を矢印で表示する。磁力は数値
 class DirectionPlotter:
     def __init__(self) -> None:
         self.rad = 0
@@ -378,6 +389,7 @@ class DirectionPlotter:
         self.magnetic_strength = direction_data[1]
 
 
+# 角度プロットと磁場磁力プロットをコンバインして二つのグラフを同時に表示する為のクラス。
 class CombinedPlotter:
     def __init__(self, angular_plotter, direction_plotter, data_processor) -> None:
         self.fig, self.axs = plt.subplots(nrows=1, ncols=2, figsize=(9, 4))
@@ -407,6 +419,8 @@ class CombinedPlotter:
         plt.show()
 
 
+# 非同期IOを使用してシリアルポートを管理し、データの送受信を行うためのクラス。
+# asyncioとserial_asyncioを使用して非同期にシリアル通信を行う。
 class AsyncSerialManager:
     def __init__(
         self,
@@ -445,6 +459,11 @@ class AsyncSerialManager:
                 data = await self.read_data()
 
                 result_queue.put(data)
+
+        # 既存のイベントループを取得
+        # loop = asyncio.get_event_loop()
+        # # 非同期タスクをイベントループにスケジュール
+        # asyncio.run_coroutine_threadsafe(run_async_tasks(), loop=loop)
 
         def run():
             loop = asyncio.new_event_loop()
@@ -502,6 +521,8 @@ class AsyncSerialManager:
             logger.info("Close port for transport")
 
 
+# 受信したデータを処理し、解析結果をCombinedPlotterクラスに渡すためのクラス。
+# 受信データキューからデータを取得し、HWT905_TTL_Dataparserクラスを使用して解析を行う。
 class DataProcessor:
     def __init__(self, read_data_queue) -> None:
         self.read_data_queue = read_data_queue
@@ -523,6 +544,8 @@ class DataProcessor:
             return None, None
 
 
+# プログラムのエントリーポイント。
+# 各クラスのインスタンスを作成してプログラムを実行する。
 def main():
     direction_plotter = DirectionPlotter()
     angular_plotter = AngularPlotter()
@@ -530,7 +553,7 @@ def main():
     result_queue = queue.Queue()
 
     asyncserialmanager = AsyncSerialManager(
-        "COM4",
+        "COM5",
         9600,
         waittime=0.1,
     )
