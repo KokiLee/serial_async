@@ -15,15 +15,15 @@ def main():
     angular_plotter = serial_communication_async.AngularPlotter()
     direction_plotter = serial_communication_async.DirectionPlotter()
 
-    result_queue = queue.Queue()
-
     asyncserialmanager = serial_communication_async.AsyncSerialManager(
         "COM4", 9600, waittime=0.1
     )
 
-    asyncserialmanager.run_async_data_processing(result_queue=result_queue)
+    asyncserialmanager.run()
 
-    dataprocessor = serial_communication_async.DataProcessor(result_queue)
+    dataprocessor = serial_communication_async.DataProcessor(
+        asyncserialmanager.result_queue
+    )
 
     combined_plotter = serial_communication_async.CombinedPlotter(
         angular_plotter, direction_plotter, dataprocessor

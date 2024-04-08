@@ -12,11 +12,13 @@ import numpy as np
 import serial
 import serial_asyncio
 from matplotlib.animation import FuncAnimation
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 from constants import ascii_control_codes
 from hwt905_ttl_dataparser import HWT905_TTL_Dataparser
 
-handler = RotatingFileHandler("app.log", maxBytes=6000000, backupCount=5)
+handler = RotatingFileHandler("apps.log", maxBytes=6000000, backupCount=5)
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 handler.setFormatter(formatter)
 logger = logging.getLogger(__name__)
@@ -298,9 +300,10 @@ class DirectionPlotter:
 
 
 # 角度プロットと磁場磁力プロットをコンバインして二つのグラフを同時に表示する為のクラス。
-class CombinedPlotter:
+class CombinedPlotter(FigureCanvas):
     def __init__(self, angular_plotter, direction_plotter, data_processor) -> None:
         self.fig, self.axs = plt.subplots(nrows=1, ncols=2, figsize=(9, 4))
+        super().__init__(self.fig)
         self.angular_plotter = angular_plotter
         self.direction_plotter = direction_plotter
         self.data_processor = data_processor
@@ -356,8 +359,10 @@ class AsyncSerialManager:
 
         self.protocol = None
         self.transport = None
+        self.loop = asyncio.get_event_loop()
+        self.result_queue = queue.Queue()
 
-    def run_async_data_processing(self, result_queue):
+    def run(self):
         async def run_async_tasks():
             open_connection_success = await self.open_serial_connection()
             if not open_connection_success:
@@ -365,23 +370,17 @@ class AsyncSerialManager:
                 return
             while True:
                 data = await self.read_data()
+                self.result_queue.put(data)
 
-                result_queue.put(data)
-
-        # 既存のイベントループを取得
-        # loop = asyncio.get_event_loop()
-        # # 非同期タスクをイベントループにスケジュール
-        # asyncio.run_coroutine_threadsafe(run_async_tasks(), loop=loop)
-
-        def run():
-            loop = asyncio.new_event_loop()
+        def start_loop():
+            loop = self.loop
             asyncio.set_event_loop(loop)
             try:
                 loop.run_until_complete(run_async_tasks())
             finally:
                 loop.close()
 
-        thread = threading.Thread(target=run)
+        thread = threading.Thread(target=start_loop)
         thread.daemon = True
         thread.start()
 
@@ -410,15 +409,15 @@ class AsyncSerialManager:
 
     async def read_data(self):
         await asyncio.sleep(self.waittime)
-        raw_angular_output_data = None
+        raw_data = None
         try:
-            raw_angular_output_data = (
+            raw_data = (
                 await self.protocol.serial_communication.read_serial_data_as_byte_list()
             )
         except Exception as e:
             logger.error(f"Data none {e}")
 
-        return raw_angular_output_data
+        return raw_data
 
     async def close_connection(self):
         if self.protocol is not None:
@@ -458,27 +457,25 @@ def main():
     direction_plotter = DirectionPlotter()
     angular_plotter = AngularPlotter()
 
-    result_queue = queue.Queue()
-
     asyncserialmanager = AsyncSerialManager(
-        "COM5",
+        "COM4",
         9600,
         waittime=0.1,
     )
 
-    asyncserialmanager.run_async_data_processing(result_queue=result_queue)
+    asyncserialmanager.run()
 
-    dataprocessor = DataProcessor(result_queue)
+    dataprocessor = DataProcessor(asyncserialmanager.result_queue)
 
     combined_plotter = CombinedPlotter(
         angular_plotter, direction_plotter, dataprocessor
     )
 
-    combined_plotter.fig.suptitle("Angle and Magnetic field")
+    # combined_plotter.fig.suptitle("Angle and Magnetic field")
 
-    combined_plotter.fig.canvas.manager.set_window_title(
-        "Witmotion: HWT905-TTL MPU-9250"
-    )
+    # combined_plotter.fig.canvas.manager.set_window_title(
+    #     "Witmotion: HWT905-TTL MPU-9250"
+    # )
 
     combined_plotter.show()
 
