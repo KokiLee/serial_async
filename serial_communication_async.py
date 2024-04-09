@@ -360,29 +360,7 @@ class AsyncSerialManager:
         self.protocol = None
         self.transport = None
         self.loop = asyncio.get_event_loop()
-        self.result_queue = queue.Queue()
-
-    def run(self):
-        async def run_async_tasks():
-            open_connection_success = await self.open_serial_connection()
-            if not open_connection_success:
-                logger.error("Failed to open serial connection")
-                return
-            while True:
-                data = await self.read_data()
-                self.result_queue.put(data)
-
-        def start_loop():
-            loop = self.loop
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(run_async_tasks())
-            finally:
-                loop.close()
-
-        thread = threading.Thread(target=start_loop)
-        thread.daemon = True
-        thread.start()
+        self.result_queue = asyncio.Queue()
 
     async def open_serial_connection(self):
         loop = asyncio.get_event_loop()
@@ -426,6 +404,15 @@ class AsyncSerialManager:
         if self.transport is not None:
             self.transport.close()
             logger.info("Close port for transport")
+
+    async def run(self):
+        open_connection_success = await self.open_serial_connection()
+        if not open_connection_success:
+            logger.error("Failed to open serial connection")
+            return
+        while True:
+            data = await self.read_data()
+            await self.result_queue.put(data)
 
 
 # 受信したデータを処理し、解析結果をCombinedPlotterクラスに渡すためのクラス。
