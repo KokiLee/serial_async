@@ -1,19 +1,19 @@
 import asyncio
-import configparser
-import cProfile
 import logging
-import math
-import queue
-import threading
+import sys
+import typing
 from logging.handlers import RotatingFileHandler
 
 import matplotlib.pyplot as plt
 import numpy as np
+import qasync
 import serial
 import serial_asyncio
 from matplotlib.animation import FuncAnimation
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
+from PyQt5 import QtCore
+from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 
 from constants import ascii_control_codes
 from hwt905_ttl_dataparser import HWT905_TTL_Dataparser
@@ -301,12 +301,19 @@ class DirectionPlotter:
 
 # 角度プロットと磁場磁力プロットをコンバインして二つのグラフを同時に表示する為のクラス。
 class CombinedPlotter(FigureCanvas):
-    def __init__(self, angular_plotter, direction_plotter, data_processor) -> None:
+    def __init__(
+        self,
+        angular_plotter,
+        direction_plotter,
+        angular_data,
+        magnetic_field_data,
+    ) -> None:
         self.fig, self.axs = plt.subplots(nrows=1, ncols=2, figsize=(9, 4))
         super().__init__(self.fig)
         self.angular_plotter = angular_plotter
         self.direction_plotter = direction_plotter
-        self.data_processor = data_processor
+        self.angular_data = angular_data
+        self.magnetic_field_data = magnetic_field_data
 
         self.angular_plotter.set_ax(self.axs[0])
         self.direction_plotter.set_ax(self.axs[1])
@@ -315,15 +322,19 @@ class CombinedPlotter(FigureCanvas):
             self.fig, self.update_plots, interval=100, save_count=300
         )
 
-    def update_plots(self, _):
-        angular_output_data, magnetic_field_output = (
-            self.data_processor.read_sensor_data()
-        )
-        if angular_output_data and magnetic_field_output:
-            self.angular_plotter.add_data(angular_output_data)
-            self.direction_plotter.add_data(magnetic_field_output)
-            self.angular_plotter.update_plot(_)
-            self.direction_plotter.update_plot(_)
+        self.data_updated = False
+
+    def update_plots(self, frame):
+        if self.data_updated:
+            self.angular_plotter.add_data(self.angular_data)
+            self.direction_plotter.add_data(self.magnetic_field_data)
+            self.angular_plotter.update_plot(None)
+            self.direction_plotter.update_plot(None)
+            self.draw()
+            self.data_updated = False
+
+    def set_data_updated(self):
+        self.data_updated = True
 
     def show(self):
         plt.tight_layout()
@@ -421,51 +432,88 @@ class DataProcessor:
     def __init__(self, read_data_queue) -> None:
         self.read_data_queue = read_data_queue
 
-    def read_sensor_data(self):
-        if not self.read_data_queue.empty():
-            sensor_data = self.read_data_queue.get()
+    async def read_sensor_data(self):
+        sensor_data = await self.read_data_queue.get()
 
-            angular_output_data = HWT905_TTL_Dataparser.protocol_angular_output(
-                sensor_data
-            )
+        angular_output_data = HWT905_TTL_Dataparser.protocol_angular_output(
+            sensor_data
+        )
 
-            magnetic_field_output = (
-                HWT905_TTL_Dataparser.protocol_magnetic_field_output(sensor_data)
-            )
+        magnetic_field_output = HWT905_TTL_Dataparser.protocol_magnetic_field_output(
+            sensor_data
+        )
 
-            return angular_output_data, magnetic_field_output
-        else:
-            return None, None
+        return angular_output_data, magnetic_field_output
+
+
+async def update_plots(combined_plotter, dataprocessor):
+
+    while True:
+        angular_output_data, magnetic_field_output = (
+            await dataprocessor.read_sensor_data()
+        )
+
+        if angular_output_data and magnetic_field_output:
+            combined_plotter.angular_data = angular_output_data
+            combined_plotter.magnetic_field_data = magnetic_field_output
+            print(combined_plotter.angular_data, combined_plotter.magnetic_field_data)
+            # combined_plotter.angular_plotter.update_plot(None)
+            # combined_plotter.direction_plotter.update_plot(None)
+            # combined_plotter.update_plots(None)
+
+            combined_plotter.set_data_updated()
+
+        await asyncio.sleep(0.1)  # 適宜調整
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, combained_plotter) -> None:
+        super().__init__()
+        self.setWindowTitle("Plot")
+        self.setGeometry(200, 100, 800, 600)
+
+        widget = QWidget(self)
+        self.setCentralWidget(widget)
+
+        layout = QVBoxLayout(widget)
+
+        layout.addWidget(combained_plotter)
 
 
 # プログラムのエントリーポイント。
 # 各クラスのインスタンスを作成してプログラムを実行する。
-def main():
+async def main():
+
+    asyncserialmanager = AsyncSerialManager("COM4", 9600, waittime=0.1)
+    dataprocessor = DataProcessor(asyncserialmanager.result_queue)
+
+    # シリアル通信のタスクを開始
+    task = asyncio.create_task(asyncserialmanager.run())
+
     direction_plotter = DirectionPlotter()
     angular_plotter = AngularPlotter()
 
-    asyncserialmanager = AsyncSerialManager(
-        "COM4",
-        9600,
-        waittime=0.1,
-    )
-
-    asyncserialmanager.run()
-
-    dataprocessor = DataProcessor(asyncserialmanager.result_queue)
-
     combined_plotter = CombinedPlotter(
-        angular_plotter, direction_plotter, dataprocessor
+        angular_plotter,
+        direction_plotter,
+        [],
+        [],
     )
 
-    # combined_plotter.fig.suptitle("Angle and Magnetic field")
+    # プロットの更新タスクを開始
+    update_task = asyncio.create_task(update_plots(combined_plotter, dataprocessor))
 
-    # combined_plotter.fig.canvas.manager.set_window_title(
-    #     "Witmotion: HWT905-TTL MPU-9250"
-    # )
+    main_window = MainWindow(combined_plotter)
+    main_window.show()
 
-    combined_plotter.show()
+    # シリアル通信とプロット更新のタスクを待機
+    await asyncio.gather(task, update_task)
+
+    await asyncserialmanager.close_connection()
 
 
 if __name__ == "__main__":
-    main()
+    app = QApplication(sys.argv)
+    loop = qasync.QEventLoop(app)
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(main())
