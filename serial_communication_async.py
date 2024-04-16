@@ -11,8 +11,7 @@ import serial
 import serial_asyncio
 from matplotlib.animation import FuncAnimation
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from PyQt5 import QtCore
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QCoreApplication
 from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 
 from constants import ascii_control_codes
@@ -308,7 +307,7 @@ class CombinedPlotter(FigureCanvas):
         angular_data,
         magnetic_field_data,
     ) -> None:
-        self.fig, self.axs = plt.subplots(nrows=1, ncols=2, figsize=(9, 4))
+        self.fig, self.axs = plt.subplots(nrows=1, ncols=2, figsize=(6, 4))
         super().__init__(self.fig)
         self.angular_plotter = angular_plotter
         self.direction_plotter = direction_plotter
@@ -421,9 +420,12 @@ class AsyncSerialManager:
         if not open_connection_success:
             logger.error("Failed to open serial connection")
             return
-        while True:
-            data = await self.read_data()
-            await self.result_queue.put(data)
+        try:
+            while True:
+                data = await self.read_data()
+                await self.result_queue.put(data)
+        except asyncio.CancelledError:
+            print("STOP")
 
 
 # 受信したデータを処理し、解析結果をCombinedPlotterクラスに渡すためのクラス。
@@ -447,30 +449,31 @@ class DataProcessor:
 
 
 async def update_plots(combined_plotter, dataprocessor):
+    try:
+        while True:
+            angular_output_data, magnetic_field_output = (
+                await dataprocessor.read_sensor_data()
+            )
 
-    while True:
-        angular_output_data, magnetic_field_output = (
-            await dataprocessor.read_sensor_data()
-        )
+            if angular_output_data and magnetic_field_output:
+                combined_plotter.angular_data = angular_output_data
+                combined_plotter.magnetic_field_data = magnetic_field_output
+                combined_plotter.set_data_updated()
 
-        if angular_output_data and magnetic_field_output:
-            combined_plotter.angular_data = angular_output_data
-            combined_plotter.magnetic_field_data = magnetic_field_output
-            print(combined_plotter.angular_data, combined_plotter.magnetic_field_data)
-            # combined_plotter.angular_plotter.update_plot(None)
-            # combined_plotter.direction_plotter.update_plot(None)
-            # combined_plotter.update_plots(None)
-
-            combined_plotter.set_data_updated()
-
-        await asyncio.sleep(0.1)  # 適宜調整
+            await asyncio.sleep(0.1)
+    except asyncio.CancelledError as e:
+        print(f"update_plots: {e}")
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, combained_plotter) -> None:
+    def __init__(self, combained_plotter, serial_receive_task, update_task) -> None:
         super().__init__()
         self.setWindowTitle("Plot")
-        self.setGeometry(200, 100, 800, 600)
+        self.setGeometry(100, 100, 900, 400)
+
+        self.serial_receive_task = serial_receive_task
+        self.update_task = update_task
+        self.combinedPlotter = combained_plotter
 
         widget = QWidget(self)
         self.setCentralWidget(widget)
@@ -478,6 +481,23 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(widget)
 
         layout.addWidget(combained_plotter)
+
+    def closeEvent(self, event):
+        asyncio.create_task(self.async_cleanup())
+        super().closeEvent(event)
+
+    async def async_cleanup(self):
+        try:
+            self.serial_receive_task.cancel()
+            self.update_task.cancel()
+            await asyncio.gather(
+                self.serial_receive_task, self.update_task, return_exceptions=True
+            )
+
+            QCoreApplication.quit()
+            print("end")
+        except asyncio.CancelledError as e:
+            print(f"closeEvent: {e}")
 
 
 # プログラムのエントリーポイント。
@@ -503,7 +523,7 @@ async def main():
     # プロットの更新タスクを開始
     update_task = asyncio.create_task(update_plots(combined_plotter, dataprocessor))
 
-    main_window = MainWindow(combined_plotter)
+    main_window = MainWindow(combined_plotter, task, update_task)
     main_window.show()
 
     # シリアル通信とプロット更新のタスクを待機
