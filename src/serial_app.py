@@ -34,7 +34,9 @@ async def main():
         serial_communication_async.update_plots(combined_plotter, dataprocessor)
     )
 
-    main_window = serial_communication_async.MainWindow(combined_plotter)
+    main_window = serial_communication_async.MainWindow(
+        combined_plotter, task, update_task
+    )
     main_window.show()
 
     # シリアル通信とプロット更新のタスクを待機
