@@ -1,6 +1,6 @@
 import pytest
 
-from serial_communication_async import DataParser
+from src.serial_communication_async import DataParser
 
 
 @pytest.mark.asyncio
