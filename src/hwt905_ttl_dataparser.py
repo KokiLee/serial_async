@@ -26,7 +26,9 @@ class HWT905_TTL_Dataparser:
         return current_angle
 
     @staticmethod
-    def protocol_angular_output(data):
+    def protocol_angular_output(
+        data,
+    ):  # -> tuple[FixtureFunction[SimpleFixtureFunction, FactoryFixtu...:# -> tuple[FixtureFunction[SimpleFixtureFunction, FactoryFixtu...:# -> tuple[FixtureFunction[SimpleFixtureFunction, FactoryFixtu...:
         previous_roll = 0
         previous_pitch = 0
         previous_yaw = 0
@@ -35,24 +37,24 @@ class HWT905_TTL_Dataparser:
         yaw = None
         try:
             for i in range(len(data) - 1):
-                if data[i] == 0x55 and data[i + 1] == 0x53:
+                if data[i] == 0x55 and data[i + 1] == 0x53:  # type: ignore
                     # Byte value: An integer representing a single byte. Example: 85 or 0x55
                     # Byte string: A sequence containing one or more byte values. Example: b"\x55"
 
                     # Combine as a byte sequence.
-                    roll_L_H = bytes([data[i + 2], data[i + 3]])
+                    roll_L_H = bytes([data[i + 2], data[i + 3]])  # type: ignore
                     combined_roll = int.from_bytes(
                         roll_L_H, byteorder="little", signed=True
                     )
                     roll = combined_roll / 32768.0 * 180
 
-                    pitch_L_H = bytes([data[i + 4], data[i + 5]])
+                    pitch_L_H = bytes([data[i + 4], data[i + 5]])  # type: ignore
                     combined_pitch = int.from_bytes(
                         pitch_L_H, byteorder="little", signed=True
                     )
                     pitch = combined_pitch / 32768.0 * 180
 
-                    yaw_L_H = bytes([data[i + 6], data[i + 7]])
+                    yaw_L_H = bytes([data[i + 6], data[i + 7]])  # type: ignore
                     combined_yaw = int.from_bytes(
                         yaw_L_H, byteorder="little", signed=True
                     )
@@ -82,10 +84,10 @@ class HWT905_TTL_Dataparser:
         direction = 0
         magnetic_strength = 0
         for i in range(len(data) - 1):
-            if data[i] == 0x55 and data[i + 1] == 0x54:
-                hxl_hxh = bytes([data[i + 2], data[i + 3]])
-                hyl_hyh = bytes([data[i + 4], data[i + 5]])
-                hzl_hzh = bytes([data[i + 6], data[i + 7]])
+            if data[i] == 0x55 and data[i + 1] == 0x54:  # type: ignore
+                hxl_hxh = bytes([data[i + 2], data[i + 3]])  # type: ignore
+                hyl_hyh = bytes([data[i + 4], data[i + 5]])  # type: ignore
+                hzl_hzh = bytes([data[i + 6], data[i + 7]])  # type: ignore
 
                 combined_x = int.from_bytes(hxl_hxh, byteorder="little", signed=True)
                 combined_y = int.from_bytes(hyl_hyh, byteorder="little", signed=True)
