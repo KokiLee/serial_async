@@ -1,6 +1,6 @@
 import pytest
 
-from src.serial_communication_async import DataParser
+from src.serial_communication_async import DataParser, HWT905_TTL_Dataparser
 
 
 @pytest.mark.asyncio
@@ -37,3 +37,40 @@ async def test_parity_check():
 
     # Noneデータ
     assert await DataParser.parity_check(None, b"A", b"*", 0) == False
+
+
+@pytest.mark.asyncio
+async def test_prity_check_with_real_data():
+    test_data = b"UQ\xff\xff\xe3\xff\x06\x08\n\x0b\xa9UR\x00\x00\x00\x00\x00\x00\n\x0b\xbcUS\x94\xfe\x08\x00\xfd\x06\xccF"
+    test_data_magnetic = b"UQ'\x00g\xff\x05\x08~\t\xc7UR\x00\x00\xff\xff\x00\x00~\t,US\x1e\xfc=\xff\x17\xd6\xccF\xfdUT\xf6\xfbI\x03\xa1\xf3\x00\x00z"
+
+    result = await DataParser.parity_check(test_data)
+    result1 = await DataParser.parity_check(test_data_magnetic)
+
+    assert result is not None
+    assert result1 is not None
+    assert isinstance(result, str)
+    assert isinstance(result1, str)
+
+
+@pytest.mark.asyncio
+def test_protocol_with_multiple_packets():
+    test_data = b"UQ\xff\xff\xe3\xff\x06\x08\n\x0b\xa9UR\x00\x00\x00\x00\x00\x00\n\x0b\xbcUS\x94\xfe\x08\x00\xfd\x06\xccF"
+    test_data_magnetic = b"UQ'\x00g\xff\x05\x08~\t\xc7UR\x00\x00\xff\xff\x00\x00~\t,US\x1e\xfc=\xff\x17\xd6\xccF\xfdUT\xf6\xfbI\x03\xa1\xf3\x00\x00z"
+
+    angular_result = HWT905_TTL_Dataparser.protocol_angular_output(test_data)
+    magnetic_result = HWT905_TTL_Dataparser.protocol_magnetic_field_output(
+        test_data_magnetic
+    )
+
+    assert angular_result is not None
+    assert magnetic_result is not None
+
+    roll, pitch, yaw = angular_result
+    direction, magnetic_strength = magnetic_result
+    assert -180 <= roll <= 180
+    assert -180 <= pitch <= 180
+    assert -180 <= yaw <= 180
+
+    assert 0 <= direction <= 360
+    assert 0 <= magnetic_strength
