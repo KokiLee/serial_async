@@ -7,7 +7,7 @@ name = "py_serial_app_for_witmotion"
 version = "1.0.0"
 description = "Serial communication application with GUI"
 authors = [
-    {name = "Koki Tsukimoto", email = "riko2501@gmail.com"}
+    {name = "Koki Lee", email = "riko2501@gmail.com"}
 ]
 dependencies = [
     "pyserial",
@@ -21,3 +21,5 @@ dependencies = [
 readme = "README.md"
 requires-python = ">=3.9.2"
 classifiers = ["License :: OSI Approved :: MIT License"]
+license = "MIT"
+license-files = ["LICENSE"]
