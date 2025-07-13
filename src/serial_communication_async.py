@@ -11,14 +11,13 @@ import serial
 import serial_asyncio
 from matplotlib.animation import FuncAnimation
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from PyQt5 import QtCore
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QCoreApplication
 from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 
-from constants import ascii_control_codes
-from hwt905_ttl_dataparser import HWT905_TTL_Dataparser
+from src.constants import ascii_control_codes
+from src.hwt905_ttl_dataparser import HWT905_TTL_Dataparser
 
-handler = RotatingFileHandler("apps.log", maxBytes=6000000, backupCount=5)
+handler = RotatingFileHandler("logs/apps.log", maxBytes=6000000, backupCount=5)
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 handler.setFormatter(formatter)
 logger = logging.getLogger(__name__)
@@ -126,18 +125,23 @@ class DataParser:
         endText: bytes = b"\x03",
     ):
         """Please specify the character encoding using the dec argument if it differs. The default is utf-8."""
+
+        if byteData is None:
+            logger.error("byteData is None")
+            return None
+
         decodelist = []
-        if byteData is not None:
-            try:
-                for i in byteData:
-                    if ascii_control_codes.get(i) is not None:
-                        decodelist.append(ascii_control_codes.get(i))
-                    if i == endText:
-                        break
-                    decodelist.append(i.decode(dec))
-                return "".join(decodelist)
-            except Exception as e:
-                logger.error(f"No data: {e}")
+        try:
+            for i in byteData:
+                if ascii_control_codes.get(i) is not None:
+                    decodelist.append(ascii_control_codes.get(i))
+                if i == endText:
+                    break
+                decodelist.append(i.decode(dec))
+            return "".join(decodelist)
+        except Exception as e:
+            logger.error(f"No data: {e}")
+            return None
 
     @staticmethod
     async def parity_check(
@@ -149,23 +153,26 @@ class DataParser:
         """Generates a checksum between starttext and endtext.
         starttext and endtext specify start data and end data.
         """
-        if byteData is not None:
-            try:
-                processing = True if startText is None else False
-                checkValue = initialValue
+        if byteData is None:
+            logger.error("byteData is None")
+            return False
 
-                for byte in byteData:
-                    if byte == startText:
-                        processing = True
-                        continue
-                    elif byte == endText:
-                        break
-                    if processing:
-                        checkValue ^= ord(byte)
-                return format(checkValue, "02x")
-            except Exception as e:
-                logger.error(f"Fail parity check: {e}")
-                return False
+        try:
+            processing = True if startText is None else False
+            checkValue = initialValue
+
+            for byte in byteData:
+                if byte == startText:
+                    processing = True
+                    continue
+                elif byte == endText:
+                    break
+                if processing:
+                    checkValue ^= ord(byte)
+            return format(checkValue, "02x")
+        except Exception as e:
+            logger.error(f"Fail parity check: {e}")
+            return False
 
 
 # 角度データをグラフにプロットするクラス。
@@ -200,7 +207,7 @@ class AngularPlotter:
             self.ax.relim()
             self.ax.autoscale_view()
 
-    def add_data(self, data):
+    def add_data(self, data: typing.List[float]):
         self.roll_data.append(data[0])
         self.pitch_data.append(data[1])
         self.yaw_data.append(data[2])
@@ -294,7 +301,9 @@ class DirectionPlotter:
         self.ax.axhline(y=0, color="k")
         self.ax.axvline(x=0, color="k")
 
-    def add_data(self, direction_data):
+    def add_data(self, direction_data: typing.List[float]):
+        if not direction_data or len(direction_data) < 2:
+            return
         self.rad = np.deg2rad(direction_data[0])
         self.magnetic_strength = direction_data[1]
 
@@ -308,7 +317,7 @@ class CombinedPlotter(FigureCanvas):
         angular_data,
         magnetic_field_data,
     ) -> None:
-        self.fig, self.axs = plt.subplots(nrows=1, ncols=2, figsize=(9, 4))
+        self.fig, self.axs = plt.subplots(nrows=1, ncols=2, figsize=(6, 4))
         super().__init__(self.fig)
         self.angular_plotter = angular_plotter
         self.direction_plotter = direction_plotter
@@ -421,9 +430,12 @@ class AsyncSerialManager:
         if not open_connection_success:
             logger.error("Failed to open serial connection")
             return
-        while True:
-            data = await self.read_data()
-            await self.result_queue.put(data)
+        try:
+            while True:
+                data = await self.read_data()
+                await self.result_queue.put(data)
+        except asyncio.CancelledError:
+            print("STOP")
 
 
 # 受信したデータを処理し、解析結果をCombinedPlotterクラスに渡すためのクラス。
@@ -447,30 +459,31 @@ class DataProcessor:
 
 
 async def update_plots(combined_plotter, dataprocessor):
+    try:
+        while True:
+            angular_output_data, magnetic_field_output = (
+                await dataprocessor.read_sensor_data()
+            )
 
-    while True:
-        angular_output_data, magnetic_field_output = (
-            await dataprocessor.read_sensor_data()
-        )
+            if angular_output_data and magnetic_field_output:
+                combined_plotter.angular_data = angular_output_data
+                combined_plotter.magnetic_field_data = magnetic_field_output
+                combined_plotter.set_data_updated()
 
-        if angular_output_data and magnetic_field_output:
-            combined_plotter.angular_data = angular_output_data
-            combined_plotter.magnetic_field_data = magnetic_field_output
-            print(combined_plotter.angular_data, combined_plotter.magnetic_field_data)
-            # combined_plotter.angular_plotter.update_plot(None)
-            # combined_plotter.direction_plotter.update_plot(None)
-            # combined_plotter.update_plots(None)
-
-            combined_plotter.set_data_updated()
-
-        await asyncio.sleep(0.1)  # 適宜調整
+            await asyncio.sleep(0.1)
+    except asyncio.CancelledError as e:
+        print(f"update_plots: {e}")
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, combained_plotter) -> None:
+    def __init__(self, combained_plotter, serial_receive_task, update_task) -> None:
         super().__init__()
         self.setWindowTitle("Plot")
-        self.setGeometry(200, 100, 800, 600)
+        self.setGeometry(100, 100, 900, 400)
+
+        self.serial_receive_task = serial_receive_task
+        self.update_task = update_task
+        self.combinedPlotter = combained_plotter
 
         widget = QWidget(self)
         self.setCentralWidget(widget)
@@ -479,12 +492,29 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(combained_plotter)
 
+    def closeEvent(self, event):
+        asyncio.create_task(self.async_cleanup())
+        super().closeEvent(event)
+
+    async def async_cleanup(self):
+        try:
+            self.serial_receive_task.cancel()
+            self.update_task.cancel()
+            await asyncio.gather(
+                self.serial_receive_task, self.update_task, return_exceptions=True
+            )
+
+            QCoreApplication.quit()
+            print("end")
+        except asyncio.CancelledError as e:
+            print(f"closeEvent: {e}")
+
 
 # プログラムのエントリーポイント。
 # 各クラスのインスタンスを作成してプログラムを実行する。
 async def main():
 
-    asyncserialmanager = AsyncSerialManager("COM4", 9600, waittime=0.1)
+    asyncserialmanager = AsyncSerialManager("COM3", 9600, waittime=0.1)
     dataprocessor = DataProcessor(asyncserialmanager.result_queue)
 
     # シリアル通信のタスクを開始
@@ -503,7 +533,7 @@ async def main():
     # プロットの更新タスクを開始
     update_task = asyncio.create_task(update_plots(combined_plotter, dataprocessor))
 
-    main_window = MainWindow(combined_plotter)
+    main_window = MainWindow(combined_plotter, task, update_task)
     main_window.show()
 
     # シリアル通信とプロット更新のタスクを待機

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "py_serial_app_for_witmotion"
+version = "1.0.0"
+description = "Serial communication application with GUI"
+authors = [
+    {name = "Koki Lee", email = "riko2501@gmail.com"}
+]
+dependencies = [
+    "matplotlib==3.8.2",
+    "numpy==2.3.1",
+    "PyQt5==5.15.11",
+    "PyQt5_sip==12.13.0",
+    "pyserial==3.5",
+    "pyserial_asyncio==0.6",
+    "pytest==7.4.4",
+    "qasync==0.27.1",
+    "setuptools==49.2.1",
+]
+readme = "README.md"
+requires-python = ">=3.9.2"
+classifiers = ["License :: OSI Approved :: MIT License"]
+license = "MIT"
+license-files = ["LICENSE"]
