@@ -14,10 +14,10 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtCore import QCoreApplication
 from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 
-from constants import ascii_control_codes
-from hwt905_ttl_dataparser import HWT905_TTL_Dataparser
+from src.constants import ascii_control_codes
+from src.hwt905_ttl_dataparser import HWT905_TTL_Dataparser
 
-handler = RotatingFileHandler("apps.log", maxBytes=6000000, backupCount=5)
+handler = RotatingFileHandler("logs/apps.log", maxBytes=6000000, backupCount=5)
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 handler.setFormatter(formatter)
 logger = logging.getLogger(__name__)
@@ -125,18 +125,23 @@ class DataParser:
         endText: bytes = b"\x03",
     ):
         """Please specify the character encoding using the dec argument if it differs. The default is utf-8."""
+
+        if byteData is None:
+            logger.error("byteData is None")
+            return None
+
         decodelist = []
-        if byteData is not None:
-            try:
-                for i in byteData:
-                    if ascii_control_codes.get(i) is not None:
-                        decodelist.append(ascii_control_codes.get(i))
-                    if i == endText:
-                        break
-                    decodelist.append(i.decode(dec))
-                return "".join(decodelist)
-            except Exception as e:
-                logger.error(f"No data: {e}")
+        try:
+            for i in byteData:
+                if ascii_control_codes.get(i) is not None:
+                    decodelist.append(ascii_control_codes.get(i))
+                if i == endText:
+                    break
+                decodelist.append(i.decode(dec))
+            return "".join(decodelist)
+        except Exception as e:
+            logger.error(f"No data: {e}")
+            return None
 
     @staticmethod
     async def parity_check(
@@ -148,23 +153,26 @@ class DataParser:
         """Generates a checksum between starttext and endtext.
         starttext and endtext specify start data and end data.
         """
-        if byteData is not None:
-            try:
-                processing = True if startText is None else False
-                checkValue = initialValue
+        if byteData is None:
+            logger.error("byteData is None")
+            return False
 
-                for byte in byteData:
-                    if byte == startText:
-                        processing = True
-                        continue
-                    elif byte == endText:
-                        break
-                    if processing:
-                        checkValue ^= ord(byte)
-                return format(checkValue, "02x")
-            except Exception as e:
-                logger.error(f"Fail parity check: {e}")
-                return False
+        try:
+            processing = True if startText is None else False
+            checkValue = initialValue
+
+            for byte in byteData:
+                if byte == startText:
+                    processing = True
+                    continue
+                elif byte == endText:
+                    break
+                if processing:
+                    checkValue ^= ord(byte)
+            return format(checkValue, "02x")
+        except Exception as e:
+            logger.error(f"Fail parity check: {e}")
+            return False
 
 
 # 角度データをグラフにプロットするクラス。
@@ -199,7 +207,7 @@ class AngularPlotter:
             self.ax.relim()
             self.ax.autoscale_view()
 
-    def add_data(self, data):
+    def add_data(self, data: typing.List[float]):
         self.roll_data.append(data[0])
         self.pitch_data.append(data[1])
         self.yaw_data.append(data[2])
@@ -293,7 +301,9 @@ class DirectionPlotter:
         self.ax.axhline(y=0, color="k")
         self.ax.axvline(x=0, color="k")
 
-    def add_data(self, direction_data):
+    def add_data(self, direction_data: typing.List[float]):
+        if not direction_data or len(direction_data) < 2:
+            return
         self.rad = np.deg2rad(direction_data[0])
         self.magnetic_strength = direction_data[1]
 
@@ -504,7 +514,7 @@ class MainWindow(QMainWindow):
 # 各クラスのインスタンスを作成してプログラムを実行する。
 async def main():
 
-    asyncserialmanager = AsyncSerialManager("COM4", 9600, waittime=0.1)
+    asyncserialmanager = AsyncSerialManager("COM3", 9600, waittime=0.1)
     dataprocessor = DataProcessor(asyncserialmanager.result_queue)
 
     # シリアル通信のタスクを開始
